@@ -1,0 +1,82 @@
+{
+  "orders": {
+    "Name": "orders",
+    "Columns": [
+      {
+        "Name": "id",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": true,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "user_id",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "amount",
+        "ColType": 1,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "product",
+        "ColType": 2,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      }
+    ]
+  },
+  "users": {
+    "Name": "users",
+    "Columns": [
+      {
+        "Name": "id",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": true,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "name",
+        "ColType": 2,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "age",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      }
+    ]
+  }
+}

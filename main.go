@@ -1,23 +1,70 @@
 package main
 
 import (
-	"log"
-	"net/http"
+	"bufio"
+	"fmt"
+	"os"
+	"strings"
 
-	"ai-context/internal/db"
-	"ai-context/internal/handler"
+	"agent-db/pkg/executor"
+	"agent-db/pkg/storage"
 )
 
 func main() {
-	if err := db.Init(); err != nil {
-		log.Fatalf("failed to init db: %v", err)
+	fmt.Println("╔══════════════════════════════════╗")
+	fmt.Println("║        AgentDB v0.2              ║")
+	fmt.Println("║  SQL-подобная база данных       ║")
+	fmt.Println("╠══════════════════════════════════╣")
+	fmt.Println("║  CREATE TABLE | INSERT | SELECT ║")
+	fmt.Println("║  quit/exit — выход              ║")
+	fmt.Println("╚══════════════════════════════════╝")
+	fmt.Println()
+
+	disk, err := storage.NewDiskManager("agentdb.dat")
+	if err != nil {
+		fmt.Printf("Ошибка диска: %v\n", err)
+		os.Exit(1)
+	}
+	defer disk.Close()
+
+	bp := storage.NewBufferPool(100, disk)
+	defer bp.FlushAll()
+
+	exec, err := executor.NewExecutor(bp, disk, "agentdb.catalog.json")
+	if err != nil {
+		fmt.Printf("Ошибка executor: %v\n", err)
+		os.Exit(1)
 	}
 
-	http.HandleFunc("/context", handler.HandleContext)
-	http.HandleFunc("/session", handler.HandleSession)
+	// Показываем загруженные таблицы
+	tables := exec.ListTables()
+	if len(tables) > 0 {
+		fmt.Println("Загруженные таблицы:")
+		for _, t := range tables {
+			fmt.Printf("  • %s\n", t)
+		}
+		fmt.Println()
+	}
 
-	log.Println("Server starting on :8080")
-	if err := http.ListenAndServe(":8080", nil); err != nil {
-		log.Fatalf("server failed: %v", err)
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Print("agent-db> ")
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(input)
+
+		if input == "" {
+			continue
+		}
+		if strings.ToLower(input) == "quit" || strings.ToLower(input) == "exit" {
+			fmt.Println("До свидания!")
+			break
+		}
+
+		result, err := exec.Execute(input)
+		if err != nil {
+			fmt.Printf("× Ошибка: %v\n", err)
+		} else {
+			fmt.Println(result)
+		}
 	}
 }

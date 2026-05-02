@@ -8,15 +8,15 @@ import (
 	"agent-db/pkg/storage"
 )
 
-// JoinedRow — строка после JOIN (данные из двух таблиц)
 type JoinedRow struct {
-	LeftValues  []interface{}
-	RightValues []interface{}
-	LeftName    string
-	RightName   string
+	LeftValues   []interface{}
+	LeftColumns  []string
+	RightValues  []interface{}
+	RightColumns []string
+	LeftName     string
+	RightName    string
 }
 
-// executeJoin — выполняет SELECT с JOIN
 func (e *Executor) executeJoin(stmt *parser.SelectStatement) (string, error) {
 	leftTable, ok := e.Tables[stmt.Table]
 	if !ok {
@@ -28,17 +28,12 @@ func (e *Executor) executeJoin(stmt *parser.SelectStatement) (string, error) {
 		return "", fmt.Errorf("таблица '%s' не найдена", stmt.Join.Table)
 	}
 
-	leftRows, err := leftTable.ScanFull()
-	if err != nil {
-		return "", err
-	}
+	leftCols := columnNames(leftTable.Schema)
+	rightCols := columnNames(rightTable.Schema)
 
-	rightRows, err := rightTable.ScanFull()
-	if err != nil {
-		return "", err
-	}
+	leftRows, _ := leftTable.ScanFull()
+	rightRows, _ := rightTable.ScanFull()
 
-	// Nested Loop Join
 	var joined []JoinedRow
 
 	for _, leftRow := range leftRows {
@@ -47,45 +42,51 @@ func (e *Executor) executeJoin(stmt *parser.SelectStatement) (string, error) {
 		for _, rightRow := range rightRows {
 			if evaluateJoinCondition(leftRow, rightRow, leftTable.Schema, rightTable.Schema, stmt.Join.Condition) {
 				joined = append(joined, JoinedRow{
-					LeftValues:  leftRow.Values,
-					RightValues: rightRow.Values,
-					LeftName:    stmt.Table,
-					RightName:   stmt.Join.Table,
+					LeftValues:   leftRow.Values,
+					LeftColumns:  columnNames(leftTable.Schema),
+					RightValues:  rightRow.Values,
+					RightColumns: columnNames(rightTable.Schema),
+					LeftName:     stmt.Table,
+					RightName:    stmt.Join.Table,
 				})
 				matched = true
 			}
 		}
 
-		// LEFT JOIN — если не нашли совпадений, добавляем с NULL справа
 		if !matched && stmt.Join.Type == parser.LeftJoin {
 			nullRight := make([]interface{}, len(rightTable.Schema.Columns))
 			for i := range nullRight {
 				nullRight[i] = nil
 			}
 			joined = append(joined, JoinedRow{
-				LeftValues:  leftRow.Values,
-				RightValues: nullRight,
-				LeftName:    stmt.Table,
-				RightName:   stmt.Join.Table,
+				LeftValues:   leftRow.Values,
+				LeftColumns:  leftCols,
+				RightValues:  nullRight,
+				RightColumns: rightCols,
+				LeftName:     stmt.Table,
+				RightName:    stmt.Join.Table,
 			})
 		}
 	}
 
-	// WHERE фильтрация после JOIN
 	if stmt.Condition != nil {
 		joined = filterJoinedRows(joined, stmt.Condition)
 	}
 
-	// Вывод
 	return formatJoinResult(joined, stmt), nil
 }
 
-// evaluateJoinCondition — проверяет условие JOIN для двух строк
+func columnNames(schema *storage.TableSchema) []string {
+	names := make([]string, len(schema.Columns))
+	for i, col := range schema.Columns {
+		names[i] = col.Name
+	}
+	return names
+}
+
 func evaluateJoinCondition(
-	leftRow *storage.Row,
-	rightRow *storage.Row,
-	leftSchema *storage.TableSchema,
-	rightSchema *storage.TableSchema,
+	leftRow *storage.Row, rightRow *storage.Row,
+	leftSchema *storage.TableSchema, rightSchema *storage.TableSchema,
 	cond *parser.BinaryOp,
 ) bool {
 	if cond == nil {
@@ -98,36 +99,104 @@ func evaluateJoinCondition(
 		return false
 	}
 
-	var leftVal, rightVal interface{}
+	leftColName := stripTable(leftCol.Name)
+	rightColName := stripTable(rightCol.Name)
 
-	leftIdx := findColumnIndex(leftSchema, leftCol.Name)
-	rightIdx := findColumnIndex(rightSchema, rightCol.Name)
+	leftIdx := findColumnIndex(leftSchema, leftColName)
+	rightIdx := findColumnIndex(rightSchema, rightColName)
 
-	if leftIdx >= 0 && rightIdx >= 0 {
-		leftVal = leftRow.Values[leftIdx]
-		rightVal = rightRow.Values[rightIdx]
-	} else {
-		// Может наоборот
-		leftIdx = findColumnIndex(leftSchema, rightCol.Name)
-		rightIdx = findColumnIndex(rightSchema, leftCol.Name)
-		if leftIdx >= 0 && rightIdx >= 0 {
-			leftVal = leftRow.Values[leftIdx]
-			rightVal = rightRow.Values[rightIdx]
-		} else {
-			return false
-		}
+	if leftIdx < 0 || rightIdx < 0 {
+		return false
 	}
+
+	leftVal := leftRow.Values[leftIdx]
+	rightVal := rightRow.Values[rightIdx]
 
 	return fmt.Sprintf("%v", leftVal) == fmt.Sprintf("%v", rightVal)
 }
 
-// filterJoinedRows — фильтрует JOIN-строки по WHERE
-func filterJoinedRows(rows []JoinedRow, cond *parser.BinaryOp) []JoinedRow {
-	// Упрощённо: пропускаем все (можно доработать)
-	return rows
+func stripTable(name string) string {
+	if idx := strings.Index(name, "."); idx >= 0 {
+		return name[idx+1:]
+	}
+	return name
 }
 
-// formatJoinResult — форматирует результат JOIN
+func filterJoinedRows(rows []JoinedRow, cond *parser.BinaryOp) []JoinedRow {
+	var result []JoinedRow
+	for _, row := range rows {
+		if evaluateWhereForJoin(row, cond) {
+			result = append(result, row)
+		}
+	}
+	return result
+}
+
+func evaluateWhereForJoin(row JoinedRow, cond *parser.BinaryOp) bool {
+	if cond == nil {
+		return true
+	}
+
+	leftVal := getJoinValue(row, cond.Left)
+	rightVal := getJoinValue(row, cond.Right)
+
+	return compareJoinValues(leftVal, rightVal, cond.Operator)
+}
+
+func getJoinValue(row JoinedRow, expr parser.Expression) interface{} {
+	switch e := expr.(type) {
+	case *parser.Literal:
+		return e.Value
+	case *parser.Identifier:
+		fullName := e.Name
+		colName := fullName
+		tableName := ""
+
+		if idx := strings.Index(fullName, "."); idx >= 0 {
+			tableName = fullName[:idx]
+			colName = fullName[idx+1:]
+		}
+
+		if tableName == "" || strings.EqualFold(tableName, row.LeftName) {
+			for i, name := range row.LeftColumns {
+				if strings.EqualFold(name, colName) {
+					return row.LeftValues[i]
+				}
+			}
+		}
+
+		if tableName == "" || strings.EqualFold(tableName, row.RightName) {
+			for i, name := range row.RightColumns {
+				if strings.EqualFold(name, colName) {
+					return row.RightValues[i]
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func compareJoinValues(left, right interface{}, op string) bool {
+	leftStr := fmt.Sprintf("%v", left)
+	rightStr := fmt.Sprintf("%v", right)
+
+	switch op {
+	case "=":
+		return leftStr == rightStr
+	case "!=", "<>":
+		return leftStr != rightStr
+	case ">":
+		return leftStr > rightStr
+	case "<":
+		return leftStr < rightStr
+	case ">=":
+		return leftStr >= rightStr
+	case "<=":
+		return leftStr <= rightStr
+	}
+	return false
+}
+
 func formatJoinResult(rows []JoinedRow, stmt *parser.SelectStatement) string {
 	joinType := "INNER"
 	if stmt.Join.Type == parser.LeftJoin {
@@ -139,8 +208,8 @@ func formatJoinResult(rows []JoinedRow, stmt *parser.SelectStatement) string {
 	result += fmt.Sprintf("├──────────────────────────────────────────────────────────┤\n")
 
 	for _, row := range rows {
-		leftStr := formatRowValues(row.LeftValues)
-		rightStr := formatRowValues(row.RightValues)
+		leftStr := formatJoinRowValues(row.LeftValues)
+		rightStr := formatJoinRowValues(row.RightValues)
 		result += fmt.Sprintf("│ %s | %s\n", leftStr, rightStr)
 	}
 
@@ -154,6 +223,18 @@ func formatRowValues(values []interface{}) string {
 	strs := make([]string, len(values))
 	for i, v := range values {
 		strs[i] = formatValue(v)
+	}
+	return strings.Join(strs, ", ")
+}
+
+func formatJoinRowValues(values []interface{}) string {
+	strs := make([]string, len(values))
+	for i, v := range values {
+		if v == nil {
+			strs[i] = "NULL"
+		} else {
+			strs[i] = formatValue(v)
+		}
 	}
 	return strings.Join(strs, ", ")
 }

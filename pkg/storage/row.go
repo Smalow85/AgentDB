@@ -3,8 +3,8 @@ package storage
 import (
 	"encoding/binary"
 	"fmt"
-	"strconv"
 	"math"
+	"strconv"
 	"strings"
 )
 
@@ -22,7 +22,7 @@ const (
 type ColumnDef struct {
 	Name       string
 	ColType    ColumnType
-	Nullable   bool   // true = может быть NULL
+	Nullable   bool // true = может быть NULL
 	PrimaryKey bool
 	Unique     bool
 	Default    string
@@ -61,7 +61,6 @@ func SerializeRow(row *Row, schema *TableSchema) ([]byte, error) {
 			byteIdx := i / 8
 			bitIdx := i % 8
 			nullBitmap[byteIdx] |= (1 << bitIdx)
-			// Добавляем пустое место в fixed part для null
 			fixedPart = append(fixedPart, make([]byte, colFixedSize(col))...)
 			varOffsets[i] = 0
 			continue
@@ -106,16 +105,13 @@ func SerializeRow(row *Row, schema *TableSchema) ([]byte, error) {
 			str := fmt.Sprintf("%v", row.Values[i])
 			strBytes := []byte(str)
 
-			// Offset в fixed part
 			b := make([]byte, 2)
 			binary.LittleEndian.PutUint16(b, currentVarOffset)
 			fixedPart = append(fixedPart, b...)
 
-			// Запоминаем offset для таблицы
 			varOffsets[i] = currentVarOffset
 			currentVarOffset += uint16(2 + len(strBytes))
 
-			// Данные в var data: длина + содержимое
 			lenB := make([]byte, 2)
 			binary.LittleEndian.PutUint16(lenB, uint16(len(strBytes)))
 			varData = append(varData, lenB...)
@@ -123,12 +119,10 @@ func SerializeRow(row *Row, schema *TableSchema) ([]byte, error) {
 		}
 	}
 
-	// Собираем результат
-	result := make([]byte, 0, len(nullBitmap)+len(fixedPart)+len(schema.Columns)*2+len(varData))
+	result := make([]byte, 0, nullBitmapSize+len(fixedPart)+len(schema.Columns)*2+len(varData))
 	result = append(result, nullBitmap...)
 	result = append(result, fixedPart...)
 
-	// Таблица var offsets
 	for i := 0; i < len(schema.Columns); i++ {
 		b := make([]byte, 2)
 		binary.LittleEndian.PutUint16(b, varOffsets[i])
@@ -139,34 +133,6 @@ func SerializeRow(row *Row, schema *TableSchema) ([]byte, error) {
 	return result, nil
 }
 
-func toInt32(v interface{}) int32 {
-	switch val := v.(type) {
-	case int:
-		return int32(val)
-	case int32:
-		return val
-	case float64:
-		return int32(val)
-	default:
-		return 0
-	}
-}
-
-func colFixedSize(col ColumnDef) int {
-	switch col.ColType {
-	case TypeInt:
-		return 4
-	case TypeFloat:
-		return 8
-	case TypeBool:
-		return 1
-	case TypeText:
-		return 2
-	default:
-		return 0
-	}
-}
-
 func DeserializeRow(data []byte, schema *TableSchema) (*Row, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("пустые данные строки")
@@ -174,7 +140,6 @@ func DeserializeRow(data []byte, schema *TableSchema) (*Row, error) {
 
 	pos := 0
 
-	// Null bitmap
 	nullBitmapSize := (len(schema.Columns) + 7) / 8
 	if pos+nullBitmapSize > len(data) {
 		return nil, fmt.Errorf("недостаточно данных для null bitmap")
@@ -185,7 +150,6 @@ func DeserializeRow(data []byte, schema *TableSchema) (*Row, error) {
 	values := make([]interface{}, len(schema.Columns))
 	varOffsets := make(map[int]uint16)
 
-	// Читаем fixed часть ПО ПОРЯДКУ колонок
 	for i, col := range schema.Columns {
 		byteIdx := i / 8
 		bitIdx := i % 8
@@ -193,7 +157,6 @@ func DeserializeRow(data []byte, schema *TableSchema) (*Row, error) {
 
 		if isNull {
 			values[i] = nil
-			// Пропускаем байты в fixed части для null-колонок
 			pos += colFixedSize(col)
 			continue
 		}
@@ -223,48 +186,65 @@ func DeserializeRow(data []byte, schema *TableSchema) (*Row, error) {
 
 		case TypeText:
 			if pos+2 > len(data) {
-				return nil, fmt.Errorf("недостаточно данных для TEXT offset в колонке %d", i)
+				return nil, fmt.Errorf("недостаточно данных для TEXT в колонке %d", i)
 			}
 			offset := binary.LittleEndian.Uint16(data[pos : pos+2])
 			varOffsets[i] = offset
-			if !col.Nullable {
-				values[i] = ""
-			}
 			pos += 2
 		}
 	}
 
-	// Позиция начала var data = позиция ПОСЛЕ фиксированной части + varOffsets table
-	varOffsetsTableSize := len(schema.Columns) * 2
-	varDataPos := pos + varOffsetsTableSize
+	varDataPos := pos + len(schema.Columns)*2
 
-	// Читаем var data для TEXT колонок
 	for colIdx, offset := range varOffsets {
-		// Убедимся, что это TEXT колонка и не null
 		if schema.Columns[colIdx].ColType != TypeText {
 			continue
 		}
-		if values[colIdx] == nil {
-			continue // null TEXT из bitmap
-		}
 
 		dataStart := varDataPos + int(offset)
-
 		if dataStart+2 > len(data) {
-			return nil, fmt.Errorf("недостаточно данных для TEXT в колонке %d (offset=%d)", colIdx, offset)
+			continue
 		}
 
 		strLen := binary.LittleEndian.Uint16(data[dataStart : dataStart+2])
 		dataStart += 2
 
 		if dataStart+int(strLen) > len(data) {
-			return nil, fmt.Errorf("некорректная длина TEXT в колонке %d (len=%d, max=%d)", colIdx, strLen, len(data)-dataStart)
+			continue
 		}
 
 		values[colIdx] = string(data[dataStart : dataStart+int(strLen)])
 	}
 
 	return &Row{Values: values}, nil
+}
+
+func toInt32(v interface{}) int32 {
+	switch val := v.(type) {
+	case int:
+		return int32(val)
+	case int32:
+		return val
+	case float64:
+		return int32(val)
+	default:
+		return 0
+	}
+}
+
+func colFixedSize(col ColumnDef) int {
+	switch col.ColType {
+	case TypeInt:
+		return 4
+	case TypeFloat:
+		return 8
+	case TypeBool:
+		return 1
+	case TypeText:
+		return 2
+	default:
+		return 0
+	}
 }
 
 // Helper: парсинг строки в значение нужного типа

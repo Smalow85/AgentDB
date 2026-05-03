@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgentDB Console</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <!-- Боковая панель -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>🗄️ AgentDB</h2>
+            </div>
+            <div class="sidebar-section">
+                <h3>📊 Таблицы</h3>
+                <div id="tables-list">
+                    <div class="empty-state">Загрузка...</div>
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <h3>📋 Схема</h3>
+                <div id="schema-view">
+                    <div class="empty-state">Выберите таблицу</div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Основная область -->
+        <main class="main">
+            <header class="header">
+                <h1>AgentDB Console</h1>
+                <span class="version">v0.6</span>
+            </header>
+
+            <!-- Редактор запроса -->
+            <div class="query-editor">
+                <div class="editor-header">
+                    <span>SQL Запрос</span>
+                    <span class="shortcut">Ctrl+Enter — выполнить</span>
+                </div>
+                <textarea id="sql-input" placeholder="SELECT * FROM users ORDER BY id LIMIT 10;" rows="4"></textarea>
+                <div class="editor-actions">
+                    <button class="btn-execute" id="btn-execute">▶ Выполнить</button>
+                    <button class="btn-clear" id="btn-clear">Очистить</button>
+                </div>
+            </div>
+
+            <!-- История запросов -->
+            <div class="history" id="history">
+                <div class="history-header">📝 История запросов</div>
+                <div id="history-list"></div>
+            </div>
+
+            <!-- Результаты -->
+            <div class="results" id="results">
+                <div class="results-header">📋 Результаты</div>
+                <pre id="result-output"></pre>
+                <div id="result-status" class="result-status"></div>
+            </div>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

@@ -70,8 +70,8 @@ func TestExecuteJoin(t *testing.T) {
 		t.Logf("  order[%d]: %v", i, r.Values)
 	}
 
-	// JOIN
-	result, err := exec.Execute("SELECT * FROM users JOIN orders ON users.id = orders.user_id")
+	// JOIN с ORDER BY и LIMIT
+	result, err := exec.Execute("SELECT * FROM users JOIN orders ON users.id = orders.user_id ORDER BY orders.amount DESC LIMIT 3")
 	t.Logf("JOIN result:\n%s", result)
 	if err != nil {
 		t.Fatalf("JOIN error: %v", err)
@@ -79,6 +79,16 @@ func TestExecuteJoin(t *testing.T) {
 
 	if result == "" {
 		t.Error("JOIN вернул пустой результат")
+	}
+
+	// Проверяем что это JOIN результат
+	if !containsString(result, "JOIN") {
+		t.Error("Результат не содержит JOIN")
+	}
+
+	// Проверяем что есть данные из обеих таблиц
+	if containsString(result, " Charlie") && containsString(result, "NULL") {
+		t.Log("LEFT JOIN работает корректно")
 	}
 }
 

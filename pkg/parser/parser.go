@@ -2,6 +2,7 @@ package parser
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -35,7 +36,7 @@ func Parse(input string) (Statement, error) {
 	case "CREATE":
 		return p.parseCreate()
 	case "DELETE":
-    return p.parseDelete()
+		return p.parseDelete()
 	case "UPDATE":
 		return p.parseUpdate()
 	default:
@@ -65,9 +66,8 @@ func (p *Parser) expect(tokenType TokenType, value string) error {
 	return nil
 }
 
-// parseSelect: SELECT * FROM table [WHERE col op val]
 func (p *Parser) parseSelect() (*SelectStatement, error) {
-	stmt := &SelectStatement{}
+	stmt := &SelectStatement{Limit: -1, Offset: 0}
 
 	p.next() // skip SELECT
 
@@ -75,8 +75,6 @@ func (p *Parser) parseSelect() (*SelectStatement, error) {
 	for p.current().Type != TokenEOF && p.current().Value != "FROM" {
 		if p.current().Type == TokenIdentifier || p.current().Value == "*" {
 			stmt.Columns = append(stmt.Columns, p.current().Value)
-		} else if p.current().Type == TokenPunctuation && p.current().Value == "," {
-			// пропускаем запятые
 		}
 		p.next()
 	}
@@ -95,27 +93,20 @@ func (p *Parser) parseSelect() (*SelectStatement, error) {
 	// JOIN (опционально)
 	if p.current().Value == "JOIN" || p.current().Value == "INNER" || p.current().Value == "LEFT" {
 		joinType := InnerJoin
-
-		if p.current().Value == "LEFT" {
-			joinType = LeftJoin
-			p.next() // skip LEFT
-			if p.current().Value != "JOIN" {
-				return nil, fmt.Errorf("ожидается JOIN после LEFT")
+		//LEFT/RIGHT/INNER можут быть или сразу JOIN
+		if p.current().Value == "LEFT" || p.current().Value == "RIGHT" || p.current().Value == "INNER" {
+			if p.current().Value == "LEFT" {
+				joinType = LeftJoin
+			} else if p.current().Value == "RIGHT" {
+				joinType = RightJoin
 			}
-		} else if p.current().Value == "RIGHT" {
-			joinType = RightJoin
-			p.next() // skip RIGHT
-			if p.current().Value != "JOIN" {
-				return nil, fmt.Errorf("ожидается JOIN после RIGHT")
-			}
-		} else if p.current().Value == "INNER" {
-			p.next() // skip INNER
-			if p.current().Value != "JOIN" {
-				return nil, fmt.Errorf("ожидается JOIN после INNER")
-			}
+			p.next()
 		}
-
-		p.next() // skip JOIN
+		// Теперь должно быть JOIN
+		if p.current().Value != "JOIN" {
+			return nil, fmt.Errorf("ожидается JOIN")
+		}
+		p.next()
 
 		if p.current().Type != TokenIdentifier {
 			return nil, fmt.Errorf("ожидается имя таблицы после JOIN")
@@ -124,7 +115,7 @@ func (p *Parser) parseSelect() (*SelectStatement, error) {
 		p.next()
 
 		if p.current().Value != "ON" {
-			return nil, fmt.Errorf("ожидается ON")
+			return nil, fmt.Errorf("ожидается ON после JOIN")
 		}
 		p.next()
 
@@ -132,7 +123,6 @@ func (p *Parser) parseSelect() (*SelectStatement, error) {
 		if err != nil {
 			return nil, err
 		}
-
 		stmt.Join = &JoinClause{
 			Type:      joinType,
 			Table:     joinTable,
@@ -140,7 +130,7 @@ func (p *Parser) parseSelect() (*SelectStatement, error) {
 		}
 	}
 
-	// WHERE
+	// WHERE (опционально)
 	if p.current().Value == "WHERE" {
 		p.next()
 		cond, err := p.parseCondition()
@@ -148,6 +138,57 @@ func (p *Parser) parseSelect() (*SelectStatement, error) {
 			return nil, err
 		}
 		stmt.Condition = cond
+	}
+
+	// ORDER BY (опционально)
+	if p.current().Value == "ORDER" {
+		p.next() // skip ORDER
+		if p.current().Value != "BY" {
+			return nil, fmt.Errorf("ожидается BY после ORDER")
+		}
+		p.next() // skip BY
+
+		if p.current().Type != TokenIdentifier {
+			return nil, fmt.Errorf("ожидается имя колонки после ORDER BY")
+		}
+		stmt.OrderBy = p.current().Value
+		p.next()
+
+		// ASC/DESC (опционально, по умолчанию ASC)
+		if p.current().Value == "ASC" || p.current().Value == "DESC" {
+			stmt.OrderDir = p.current().Value
+			p.next()
+		} else {
+			stmt.OrderDir = "ASC"
+		}
+	}
+
+	// LIMIT (опционально)
+	if p.current().Value == "LIMIT" {
+		p.next() // skip LIMIT
+		if p.current().Type != TokenNumber {
+			return nil, fmt.Errorf("ожидается число после LIMIT")
+		}
+		limit, err := strconv.Atoi(p.current().Value)
+		if err != nil {
+			return nil, fmt.Errorf("неверное значение LIMIT: %s", p.current().Value)
+		}
+		stmt.Limit = limit
+		p.next()
+	}
+
+	// OFFSET (опционально)
+	if p.current().Value == "OFFSET" {
+		p.next() // skip OFFSET
+		if p.current().Type != TokenNumber {
+			return nil, fmt.Errorf("ожидается число после OFFSET")
+		}
+		offset, err := strconv.Atoi(p.current().Value)
+		if err != nil {
+			return nil, fmt.Errorf("неверное значение OFFSET: %s", p.current().Value)
+		}
+		stmt.Offset = offset
+		p.next()
 	}
 
 	return stmt, nil

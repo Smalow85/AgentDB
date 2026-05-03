@@ -2,6 +2,8 @@ package executor
 
 import (
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 
 	"agent-db/pkg/parser"
@@ -71,6 +73,15 @@ func (e *Executor) executeJoin(stmt *parser.SelectStatement) (string, error) {
 
 	if stmt.Condition != nil {
 		joined = filterJoinedRows(joined, stmt.Condition)
+	}
+
+	if stmt.OrderBy != "" {
+		sortJoinedRows(joined, stmt.OrderBy, stmt.OrderDir)
+	}
+
+	// LIMIT / OFFSET для JOIN
+	if stmt.Limit >= 0 || stmt.Offset > 0 {
+		joined = limitJoinedRows(joined, stmt.Limit, stmt.Offset)
 	}
 
 	return formatJoinResult(joined, stmt), nil
@@ -237,4 +248,71 @@ func formatJoinRowValues(values []interface{}) string {
 		}
 	}
 	return strings.Join(strs, ", ")
+}
+
+func sortJoinedRows(rows []JoinedRow, orderBy string, orderDir string) {
+	desc := orderDir == "DESC"
+	sort.Slice(rows, func(i, j int) bool {
+		valI := getColumnValue(rows[i], orderBy)
+		valJ := getColumnValue(rows[j], orderBy)
+
+		aStr := fmt.Sprintf("%v", valI)
+		bStr := fmt.Sprintf("%v", valJ)
+
+		// Пробуем как числа
+		na, errA := strconv.ParseFloat(aStr, 64)
+		nb, errB := strconv.ParseFloat(bStr, 64)
+
+		if errA == nil && errB == nil {
+			if desc {
+				return na > nb
+			}
+			return na < nb
+		}
+
+		// Как строки
+		if desc {
+			return aStr > bStr
+		}
+		return aStr < bStr
+	})
+}
+
+// getColumnValue ищет значение колонки в JoinedRow
+func getColumnValue(row JoinedRow, colName string) interface{} {
+	// Извлекаем имя колонки из "table.column"
+	simpleName := colName
+	if idx := strings.Index(colName, "."); idx >= 0 {
+		simpleName = colName[idx+1:]
+	}
+
+	// Ищем в левых колонках
+	for i, name := range row.LeftColumns {
+		if strings.EqualFold(name, simpleName) || strings.EqualFold(name, colName) {
+			return row.LeftValues[i]
+		}
+	}
+	// Ищем в правых колонках
+	for i, name := range row.RightColumns {
+		if strings.EqualFold(name, simpleName) || strings.EqualFold(name, colName) {
+			return row.RightValues[i]
+		}
+	}
+	return nil
+}
+
+// limitJoinedRows обрезает слайс по limit и offset
+func limitJoinedRows(rows []JoinedRow, limit int, offset int) []JoinedRow {
+	if offset >= len(rows) {
+		return []JoinedRow{}
+	}
+
+	start := offset
+	end := len(rows)
+
+	if limit >= 0 && start+limit < end {
+		end = start + limit
+	}
+
+	return rows[start:end]
 }

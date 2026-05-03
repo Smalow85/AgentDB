@@ -51,7 +51,9 @@ var keywords = map[string]bool{
     "PRIMARY": true, "KEY": true, "UNIQUE": true,
     "DEFAULT": true, "CHECK": true, "REFERENCES": true,
     "UPDATE": true, "SET": true, "DELETE": true,
-    "JOIN": true, "INNER": true, "LEFT": true, "RIGHT": true,  // ← вот эти
+    "JOIN": true, "INNER": true, "LEFT": true, "RIGHT": true,
+	"ORDER": true, "BY": true, "ASC": true, "DESC": true,
+    "LIMIT": true, "OFFSET": true,
 }
 
 func (l *Lexer) tokenize() ([]Token, error) {

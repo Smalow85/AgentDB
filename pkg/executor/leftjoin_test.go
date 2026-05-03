@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"strings"
 	"testing"
 
 	"agent-db/pkg/index"
@@ -126,10 +127,9 @@ func TestExecuteJoinWithWhere(t *testing.T) {
 }
 
 func containsNull(s string) bool {
-	return len(s) > 0 && (containsString(s, "NULL") || containsString(s, "<nil>"))
+	return containsString(s, "NULL") || containsString(s, "<nil>")
 }
 
 func containsString(s, substr string) bool {
-	return len(s) > 0 && len(substr) > 0 &&
-		(len(s) >= len(substr))
+	return len(s) > 0 && strings.Contains(s, substr)
 }

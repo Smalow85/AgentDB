@@ -252,3 +252,51 @@ func TestParseJoinWithWhere(t *testing.T) {
 
 	fmt.Printf("JOIN + WHERE: %s\n", stmt)
 }
+
+func TestParseOrderBy(t *testing.T) {
+    stmt, err := Parse("SELECT * FROM users ORDER BY age DESC")
+    if err != nil {
+        t.Fatal(err)
+    }
+
+    sel := stmt.(*SelectStatement)
+    if sel.OrderBy != "age" {
+        t.Errorf("OrderBy: 'age' != '%s'", sel.OrderBy)
+    }
+    if sel.OrderDir != "DESC" {
+        t.Errorf("OrderDir: 'DESC' != '%s'", sel.OrderDir)
+    }
+    fmt.Printf("ORDER BY: %s\n", stmt)
+}
+
+func TestParseLimit(t *testing.T) {
+    stmt, err := Parse("SELECT * FROM users LIMIT 10")
+    if err != nil {
+        t.Fatal(err)
+    }
+
+    sel := stmt.(*SelectStatement)
+    if sel.Limit != 10 {
+        t.Errorf("Limit: 10 != %d", sel.Limit)
+    }
+    fmt.Printf("LIMIT: %s\n", stmt)
+}
+
+func TestParseOrderByLimitOffset(t *testing.T) {
+    stmt, err := Parse("SELECT * FROM users ORDER BY id ASC LIMIT 5 OFFSET 10")
+    if err != nil {
+        t.Fatal(err)
+    }
+
+    sel := stmt.(*SelectStatement)
+    if sel.OrderBy != "id" || sel.OrderDir != "ASC" {
+        t.Error("OrderBy неверно")
+    }
+    if sel.Limit != 5 {
+        t.Errorf("Limit: 5 != %d", sel.Limit)
+    }
+    if sel.Offset != 10 {
+        t.Errorf("Offset: 10 != %d", sel.Offset)
+    }
+    fmt.Printf("Full: %s\n", stmt)
+}

@@ -1,23 +1,23 @@
 package executor
 
 import (
-	"fmt"
-	"strconv"
-	"strings"
-
 	"agent-db/pkg/catalog"
 	"agent-db/pkg/index"
 	"agent-db/pkg/parser"
 	"agent-db/pkg/storage"
+	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 )
 
 // Executor выполняет SQL-запросы
 type Executor struct {
-	Catalog  *catalog.Catalog
-	Tables   map[string]*storage.HeapFile
-	Indexes  map[string]*index.BTree // "table.column" -> индекс
-	BP       *storage.BufferPool
-	Disk     *storage.DiskManager
+	Catalog *catalog.Catalog
+	Tables  map[string]*storage.HeapFile
+	Indexes map[string]*index.BTree // "table.column" -> индекс
+	BP      *storage.BufferPool
+	Disk    *storage.DiskManager
 }
 
 // NewExecutor создаёт исполнитель
@@ -69,9 +69,9 @@ func (e *Executor) Execute(query string) (string, error) {
 	case *parser.SelectStatement:
 		return e.executeSelect(s)
 	case *parser.DeleteStatement:
-    	return e.executeDelete(s)
+		return e.executeDelete(s)
 	case *parser.UpdateStatement:
-    	return e.executeUpdate(s)
+		return e.executeUpdate(s)
 	default:
 		return "", fmt.Errorf("неизвестный тип запроса: %T", s)
 	}
@@ -98,7 +98,7 @@ func (e *Executor) executeCreate(stmt *parser.CreateTableStatement) (string, err
 		columns = append(columns, storage.ColumnDef{
 			Name:       col.Name,
 			ColType:    colType,
-			Nullable:   !col.NotNull,         // NotNull → Nullable = false
+			Nullable:   !col.NotNull, // NotNull → Nullable = false
 			PrimaryKey: col.PrimaryKey,
 			Unique:     col.Unique,
 			Default:    col.Default,
@@ -210,7 +210,7 @@ func (e *Executor) executeInsert(stmt *parser.InsertStatement) (string, error) {
 
 	// Проверяем constraints ДО вставки
 	if err := e.validateInsert(table, row); err != nil {
-		return "", err  // ← ВАЖНО: возвращаем ошибку, не вставляем
+		return "", err // ← ВАЖНО: возвращаем ошибку, не вставляем
 	}
 
 	rid, err := table.InsertRow(row)
@@ -277,6 +277,16 @@ func (e *Executor) executeSelect(stmt *parser.SelectStatement) (string, error) {
 	// Фильтрация
 	if stmt.Condition != nil {
 		rows = filterRows(rows, table.Schema, stmt.Condition)
+	}
+
+	// ORDER BY - после фильтрации
+	if stmt.OrderBy != "" {
+		applyOrderBy(rows, table.Schema, stmt.OrderBy, stmt.OrderDir)
+	}
+
+	// LIMIT / OFFSET - после ORDER BY
+	if stmt.Limit >= 0 || stmt.Offset > 0 {
+		rows = applyLimitOffset(rows, stmt.Limit, stmt.Offset)
 	}
 
 	// Проекция
@@ -511,4 +521,52 @@ func findColumnIndex(schema *storage.TableSchema, name string) int {
 		}
 	}
 	return -1
+}
+
+func applyOrderBy(rows []*storage.Row, schema *storage.TableSchema, orderBy string, orderDir string) {
+	colIdx := findColumnIndex(schema, orderBy)
+	if colIdx == -1 {
+		return
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		a := fmt.Sprintf("%v", rows[i].Values[colIdx])
+		b := fmt.Sprintf("%v", rows[j].Values[colIdx])
+
+		// Пробуем как числа
+		na, errA := strconv.ParseFloat(a, 64)
+		nb, errB := strconv.ParseFloat(b, 64)
+
+		if errA == nil && errB == nil {
+			if orderDir == "DESC" {
+				return na > nb
+			}
+			return na < nb
+		}
+
+		// Как строки
+		if orderDir == "DESC" {
+			return a > b
+		}
+		return a < b
+	})
+}
+
+// applyLimitOffset — обрезает строки
+func applyLimitOffset(rows []*storage.Row, limit int, offset int) []*storage.Row {
+	if offset >= len(rows) {
+		return []*storage.Row{}
+	}
+
+	end := len(rows)
+	if offset > 0 {
+		rows = rows[offset:]
+		end = len(rows)
+	}
+
+	if limit >= 0 && limit < end {
+		end = limit
+	}
+
+	return rows[:end]
 }

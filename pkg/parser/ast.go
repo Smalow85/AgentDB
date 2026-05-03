@@ -23,10 +23,14 @@ const (
 
 // SelectStatement — SELECT
 type SelectStatement struct {
-	Table     string
-	Columns   []string
-	Condition *BinaryOp
-	Join      *JoinClause // новое поле
+    Table     string
+    Columns   []string
+    Condition *BinaryOp
+    Join      *JoinClause
+    OrderBy   string
+    OrderDir  string
+    Limit     int
+    Offset    int
 }
 
 type JoinClause struct {

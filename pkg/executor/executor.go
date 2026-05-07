@@ -279,6 +279,17 @@ func (e *Executor) executeSelect(stmt *parser.SelectStatement) (string, error) {
 		rows = filterRows(rows, table.Schema, stmt.Condition)
 	}
 
+	if len(stmt.Aggregates) > 0 {
+		aggResult := computeAggregates(rows, table.Schema, stmt.Aggregates)
+		
+		result := "\n┌──────────────────────────────────┐\n"
+		for key, val := range aggResult {
+			result += fmt.Sprintf("│ %-20s %v\n", key, val)
+		}
+		result += "└──────────────────────────────────┘\n"
+		return result, nil
+	}
+
 	// ORDER BY - после фильтрации
 	if stmt.OrderBy != "" {
 		applyOrderBy(rows, table.Schema, stmt.OrderBy, stmt.OrderDir)
@@ -569,4 +580,115 @@ func applyLimitOffset(rows []*storage.Row, limit int, offset int) []*storage.Row
 	}
 
 	return rows[:end]
+}
+
+func computeAggregates(rows []*storage.Row, schema *storage.TableSchema, aggs []parser.Aggregate) map[string]interface{} {
+    result := make(map[string]interface{})
+
+    for _, agg := range aggs {
+        key := agg.Func + "(" + agg.Column + ")"
+        
+        // COUNT(*) — особый случай (не требует колонки)
+        if strings.ToUpper(agg.Func) == "COUNT" && agg.Column == "*" {
+            result[key] = int64(len(rows))
+            continue
+        }
+        
+        colIdx := findColumnIndex(schema, agg.Column)
+        if colIdx == -1 {
+            result[key] = fmt.Sprintf("ОШИБКА: колонка '%s' не найдена", agg.Column)
+            continue
+        }
+
+        switch strings.ToUpper(agg.Func) {
+        case "COUNT":
+            var count int64
+            for _, row := range rows {
+                if colIdx < len(row.Values) && row.Values[colIdx] != nil {
+                    count++
+                }
+            }
+            result[key] = count
+
+        case "SUM":
+            var sum float64
+            for _, row := range rows {
+                if colIdx < len(row.Values) && row.Values[colIdx] != nil {
+                    sum += toFloat64(row.Values[colIdx])
+                }
+            }
+            result[key] = sum
+
+        case "AVG":
+            var sum float64
+            var count int64
+            for _, row := range rows {
+                if colIdx < len(row.Values) && row.Values[colIdx] != nil {
+                    sum += toFloat64(row.Values[colIdx])
+                    count++
+                }
+            }
+            if count > 0 {
+                result[key] = sum / float64(count)
+            } else {
+                result[key] = 0.0
+            }
+
+        case "MIN":
+            var min interface{}
+            for _, row := range rows {
+                if colIdx < len(row.Values) && row.Values[colIdx] != nil {
+                    val := row.Values[colIdx]
+                    if min == nil {
+                        min = val
+                    } else if toFloat64(val) < toFloat64(min) {
+                        min = val
+                    }
+                }
+            }
+            if min != nil {
+                result[key] = min
+            } else {
+                result[key] = nil
+            }
+
+        case "MAX":
+            var max interface{}
+            for _, row := range rows {
+                if colIdx < len(row.Values) && row.Values[colIdx] != nil {
+                    val := row.Values[colIdx]
+                    if max == nil {
+                        max = val
+                    } else if toFloat64(val) > toFloat64(max) {
+                        max = val
+                    }
+                }
+            }
+            if max != nil {
+                result[key] = max
+            } else {
+                result[key] = nil
+            }
+        }
+    }
+
+    return result
+}
+
+func toFloat64(v interface{}) float64 {
+    switch val := v.(type) {
+    case int: return float64(val)
+    case int32: return float64(val)
+    case int64: return float64(val)
+    case float32: return float64(val)
+    case float64: return val
+    default: return 0
+    }
+}
+
+func compareValues(a, b interface{}) int {
+    na, nb := toFloat64(a), toFloat64(b)
+    if na < nb { return -1 }
+    if na > nb { return 1 }
+    return 0
 }

@@ -54,6 +54,7 @@ var keywords = map[string]bool{
     "JOIN": true, "INNER": true, "LEFT": true, "RIGHT": true,
 	"ORDER": true, "BY": true, "ASC": true, "DESC": true,
     "LIMIT": true, "OFFSET": true,
+	"COUNT": true, "SUM": true, "AVG": true, "MIN": true, "MAX": true,
 }
 
 func (l *Lexer) tokenize() ([]Token, error) {

@@ -300,3 +300,27 @@ func TestParseOrderByLimitOffset(t *testing.T) {
     }
     fmt.Printf("Full: %s\n", stmt)
 }
+
+func TestParseCount(t *testing.T) {
+    stmt, err := Parse("SELECT COUNT(*) FROM users")
+    if err != nil {
+        t.Fatal(err)
+    }
+    sel := stmt.(*SelectStatement)
+    if len(sel.Aggregates) != 1 || sel.Aggregates[0].Func != "COUNT" {
+        t.Error("Неверный парсинг COUNT")
+    }
+    fmt.Printf("Aggregates: %v\n", sel.Aggregates)
+}
+
+func TestParseAggregates(t *testing.T) {
+    stmt, err := Parse("SELECT COUNT(*), AVG(age), MAX(salary) FROM users")
+    if err != nil {
+        t.Fatal(err)
+    }
+    sel := stmt.(*SelectStatement)
+    if len(sel.Aggregates) != 3 {
+        t.Errorf("Ожидалось 3 агрегата, получено %d", len(sel.Aggregates))
+    }
+    fmt.Printf("Aggregates: %v\n", sel.Aggregates)
+}

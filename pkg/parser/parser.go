@@ -73,12 +73,25 @@ func (p *Parser) parseSelect() (*SelectStatement, error) {
 
 	// Колонки
 	for p.current().Type != TokenEOF && p.current().Value != "FROM" {
-		if p.current().Type == TokenIdentifier || p.current().Value == "*" {
-			stmt.Columns = append(stmt.Columns, p.current().Value)
-		}
-		p.next()
-	}
-
+    if p.current().Value == "COUNT" || p.current().Value == "SUM" ||
+       p.current().Value == "AVG" || p.current().Value == "MIN" ||
+       p.current().Value == "MAX" {
+        // Парсим агрегатную функцию
+        agg, err := p.parseAggregate()
+        if err != nil {
+            return nil, err
+        }
+        stmt.Aggregates = append(stmt.Aggregates, agg)
+        stmt.Columns = append(stmt.Columns, agg.Func+"("+agg.Column+")")
+    } else if p.current().Type == TokenIdentifier || p.current().Value == "*" {
+        stmt.Columns = append(stmt.Columns, p.current().Value)
+        p.next()
+    } else if p.current().Type == TokenPunctuation && p.current().Value == "," {
+        p.next()
+    } else {
+        p.next()
+    }
+}
 	if p.current().Value != "FROM" {
 		return nil, fmt.Errorf("ожидается FROM")
 	}
@@ -529,4 +542,31 @@ func (p *Parser) parseUpdate() (*UpdateStatement, error) {
 	}
 
 	return stmt, nil
+}
+
+func (p *Parser) parseAggregate() (Aggregate, error) {
+    agg := Aggregate{}
+    agg.Func = p.current().Value
+    p.next() // skip COUNT/SUM/etc
+
+    if p.current().Value != "(" {
+        return agg, fmt.Errorf("ожидается ( после %s", agg.Func)
+    }
+    p.next() // skip (
+
+    if p.current().Value == "*" {
+        agg.Column = "*"
+    } else if p.current().Type == TokenIdentifier {
+        agg.Column = p.current().Value
+    } else {
+        return agg, fmt.Errorf("ожидается колонка или *")
+    }
+    p.next()
+
+    if p.current().Value != ")" {
+        return agg, fmt.Errorf("ожидается )")
+    }
+    p.next()
+
+    return agg, nil
 }

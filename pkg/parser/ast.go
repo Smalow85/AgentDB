@@ -21,16 +21,23 @@ const (
 	RightJoin
 )
 
-// SelectStatement — SELECT
 type SelectStatement struct {
-    Table     string
-    Columns   []string
-    Condition *BinaryOp
-    Join      *JoinClause
-    OrderBy   string
-    OrderDir  string
-    Limit     int
-    Offset    int
+    Table      string
+    Columns    []string       // имена колонок (для "*" или обычных)
+    Aggregates []Aggregate    // агрегатные функции
+    Condition  *BinaryOp
+    Join       *JoinClause
+    OrderBy    string
+    OrderDir   string
+    Limit      int
+    Offset     int
+    GroupBy    string         // для будущего GROUP BY
+}
+
+type Aggregate struct {
+    Func     string // COUNT, SUM, AVG, MIN, MAX
+    Column   string // имя колонки или "*"
+    Alias    string // опциональный алиас
 }
 
 type JoinClause struct {
@@ -160,4 +167,15 @@ type UpdatePair struct {
 func (s *UpdateStatement) stmt() {}
 func (s *UpdateStatement) String() string {
 	return fmt.Sprintf("UPDATE %s SET ...", s.Table)
+}
+
+// FuncCall — вызов функции (COUNT, SUM, AVG, MIN, MAX)
+type FuncCall struct {
+    Name     string // COUNT, SUM, AVG, MIN, MAX
+    Argument Expression // колонка или "*"
+}
+
+func (f *FuncCall) expr() {}
+func (f *FuncCall) String() string {
+    return fmt.Sprintf("%s(%s)", f.Name, f.Argument)
 }

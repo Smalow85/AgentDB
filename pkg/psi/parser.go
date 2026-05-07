@@ -23,9 +23,9 @@ func NewPSIParser(g *graph.Graph) *PSIParser {
 }
 
 func (p *PSIParser) ParseRepo(repoPath string) error {
-	return filepath.Walk(repoPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return err
+	err := filepath.Walk(repoPath, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil || info.IsDir() {
+			return walkErr
 		}
 		lang := DetectLanguage(path)
 		if lang == nil {
@@ -33,6 +33,14 @@ func (p *PSIParser) ParseRepo(repoPath string) error {
 		}
 		return p.ParseFile(path, lang)
 	})
+	
+	if err != nil {
+		return err
+	}
+
+	// Резолвим ссылки между файлами
+	p.ResolveAllReferences()
+	return nil
 }
 
 func (p *PSIParser) ParseFile(filePath string, lang *LanguageInfo) error {
@@ -102,17 +110,36 @@ func (p *PSIParser) walkNode(parentID int64, node *gotreesitter.Node, source str
 		return
 	}
 
-	// Вызов
+// Вызов
 	if nodeType == "call_expression" {
 		calledName := extractCallName(node, source, p.lang)
-		fmt.Printf("[DEBUG] call: %s\n", calledName)
-		if calledName != "" {
-			callNode, _ := p.Graph.AddNode([]string{"call"}, map[string]interface{}{
-				"name": calledName,
-			})
-			p.Graph.AddEdge("contains", parentID, callNode.ID)
-			p.Graph.ResolveCall(callNode.ID, parentID)
+	if calledName != "" {
+		callNode, _ := p.Graph.AddNode([]string{"call"}, map[string]interface{}{
+			"name":    calledName,
+			"context": contextName,
+		})
+		p.Graph.AddEdge("contains", parentID, callNode.ID)
+		
+		// Резолвим с учётом контекста
+		p.Graph.ResolveCallWithContext(callNode.ID, parentID, contextName)
+	}
+	}
+	
+	// Поле структуры
+	if nodeType == "field_declaration" || nodeType == "field_definition" {
+		name := extractName(node, source, p.lang)
+		fieldNode, _ := p.Graph.AddNode([]string{"field"}, map[string]interface{}{
+			"name": name,
+		})
+		p.Graph.AddEdge("contains", parentID, fieldNode.ID)
+		// Рекурсивно обходим тип поля
+		for i := 0; i < int(node.ChildCount()); i++ {
+			child := node.Child(i)
+			if child != nil {
+				p.walkNode(fieldNode.ID, child, source, contextName)
+			}
 		}
+		return
 	}
 
 	// Рекурсия
@@ -185,4 +212,16 @@ func printAllNodes(node *gotreesitter.Node, lang *gotreesitter.Language, indent 
 			printAllNodes(child, lang, indent+1)
 		}
 	}
+}
+
+func (p *PSIParser) ResolveAllReferences() {
+    calls := p.Graph.FindNodes(graph.Query{Label: "call"})
+    for _, call := range calls {
+        // Если у вызова ещё нет исходящих References
+        refs := p.Graph.GetReferences(call.ID, graph.DirectionOutgoing)
+        if len(refs) == 0 {
+            // Пробуем зарезолвить глобально
+            p.Graph.ResolveCall(call.ID, 0)
+        }
+    }
 }

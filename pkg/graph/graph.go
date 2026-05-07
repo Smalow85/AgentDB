@@ -582,3 +582,51 @@ func (g *Graph) SaveToDisk() error {
     page.Dirty = true
     return g.Store.Disk.WritePage(page)
 }
+
+// ResolveCallWithContext ищет функцию с учётом контекста (класса)
+func (g *Graph) ResolveCallWithContext(callNodeID, scopeNodeID int64, contextName string) (*Reference, error) {
+    callNode := g.GetNode(callNodeID)
+    if callNode == nil {
+        return nil, fmt.Errorf("узел вызова %d не найден", callNodeID)
+    }
+
+    callName, ok := callNode.GetProp("name")
+    if !ok {
+        return nil, fmt.Errorf("у вызова %d нет имени", callNodeID)
+    }
+
+    // 1. Если есть контекст (вызов внутри метода класса), ищем метод в том же классе
+    if contextName != "" {
+        // Найти класс по имени контекста
+        classes := g.FindNodes(Query{Label: "class", Property: "name", Value: contextName})
+        for _, class := range classes {
+            // Ищем метод в этом классе
+            methods := g.GetNeighbors(class.ID, DirectionOutgoing)
+            for _, m := range methods {
+                if m.HasLabel("function") {
+                    if name, _ := m.GetProp("name"); name == callName {
+                        return g.AddReference(callNodeID, m.ID, "call")
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Ищем среди всех функций (глобально)
+    funcs := g.FindNodes(Query{Label: "function", Property: "name", Value: callName})
+    if len(funcs) > 0 {
+        return g.AddReference(callNodeID, funcs[0].ID, "call")
+    }
+
+    // 3. Неразрешённая ссылка
+    ref := &Reference{
+        ID:         g.nextRefID,
+        SourceID:   callNodeID,
+        Type:       "call",
+        IsResolved: false,
+    }
+    g.nextRefID++
+    g.refByID[ref.ID] = ref
+    g.refBySource[callNodeID] = append(g.refBySource[callNodeID], ref.ID)
+    return ref, nil
+}

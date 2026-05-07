@@ -54,6 +54,7 @@ func (s *Server) Start(addr string) error {
 	http.HandleFunc("/api/parse", s.handleParse)
 	http.HandleFunc("/api/graph", s.handleGraph)
 	http.HandleFunc("/api/graphs", s.handleGraphList)
+	http.HandleFunc("/api/psi/query", s.handlePSIQuery)
 
 	staticFS, _ := fs.Sub(staticFiles, "static")
 	http.Handle("/", http.FileServer(http.FS(staticFS)))
@@ -173,6 +174,58 @@ func (s *Server) handleParse(w http.ResponseWriter, r *http.Request) {
         "functions": len(functions),
         "calls":     len(calls),
     })
+}
+
+func (s *Server) handlePSIQuery(w http.ResponseWriter, r *http.Request) {
+    var req struct {
+        Type  string `json:"type"`  // "class", "method", "callers", "callees"
+        Name  string `json:"name"`
+        Class string `json:"class"`
+    }
+    json.NewDecoder(r.Body).Decode(&req)
+
+    switch req.Type {
+    case "class":
+        nodes := s.PSIGraph.FindNodes(graph.Query{
+            Label: "class", Property: "name", Value: req.Name,
+        })
+        if len(nodes) > 0 {
+            methods := s.PSIGraph.GetNeighbors(nodes[0].ID, graph.DirectionOutgoing)
+            var result []map[string]interface{}
+            for _, m := range methods {
+                name, _ := m.GetProp("name")
+                result = append(result, map[string]interface{}{
+                    "name": name,
+                    "type": m.Labels[0],
+                })
+            }
+            writeJSON(w, map[string]interface{}{
+                "class":  req.Name,
+                "methods": result,
+            })
+            return
+        }
+
+    case "callers":
+        funcs := s.PSIGraph.FindNodes(graph.Query{
+            Label: "function", Property: "name", Value: req.Name,
+        })
+        if len(funcs) > 0 {
+            callers := s.PSIGraph.GetCallers(funcs[0].ID)
+            var result []string
+            for _, c := range callers {
+                name, _ := c.GetProp("name")
+                result = append(result, fmt.Sprintf("%v", name))
+            }
+            writeJSON(w, map[string]interface{}{
+                "function": req.Name,
+                "callers":  result,
+            })
+            return
+        }
+    }
+
+    writeJSON(w, map[string]string{"error": "не найдено"})
 }
 
 func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {

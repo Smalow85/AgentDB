@@ -44,6 +44,31 @@
       }
     ]
   },
+  "products": {
+    "Name": "products",
+    "Columns": [
+      {
+        "Name": "id",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": true,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "name",
+        "ColType": 2,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      }
+    ]
+  },
   "users": {
     "Name": "users",
     "Columns": [

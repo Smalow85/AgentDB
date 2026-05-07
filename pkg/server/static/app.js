@@ -8,12 +8,10 @@ let pan = {x:0, y:0}
 let isPanning = false
 let panStart = {x:0, y:0}
 let hovered = null
+let selected = null
 let filterType = 'all'
 let searchQuery = ''
 let simulationTick = 0
-
-const WIDTH = 900
-const HEIGHT = 600
 
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-execute').onclick = execute
@@ -37,6 +35,10 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.tab').forEach(t => t.onclick = () => switchTab(t.dataset.tab))
 
     const cvs = document.getElementById('graph-canvas')
+    
+    window.addEventListener('resize', () => {
+        if (graphData) draw()
+    })
     
     cvs.addEventListener('mousedown', e => {
         const pos = getPos(e, cvs)
@@ -74,8 +76,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     })
 
-    cvs.addEventListener('mouseup', () => { draggedNode = null; isPanning = false })
-    cvs.addEventListener('mouseleave', () => { draggedNode = null; isPanning = false })
+    cvs.addEventListener('mouseup', e => {
+        if (draggedNode && !isPanning) {
+            selected = draggedNode
+            showNodeDetails(selected)
+            draw()
+        }
+        draggedNode = null
+        isPanning = false
+    })
+    cvs.addEventListener('mouseleave', () => { draggedNode = null; isPanning = false; hovered = null; draw() })
 
     cvs.addEventListener('wheel', e => {
         e.preventDefault()
@@ -100,14 +110,17 @@ async function loadGraph() {
     initNodes()
     runSimulation()
     draw()
+    console.log('Loaded', Object.keys(nodes).length, 'nodes, canvas:', document.getElementById('graph-canvas').width, 'x', document.getElementById('graph-canvas').height)
 }
 
 function initNodes() {
+    const cvs = document.getElementById('graph-canvas')
+    const cw = cvs.width
+    const ch = cvs.height
     const filtered = getFilteredNodes()
     const ids = new Set(filtered.map(n => n.id))
     links = graphData.edges.filter(e => ids.has(e.from) && ids.has(e.to))
     
-    // Init nodes in a grid with some randomness
     filtered.forEach((n, i) => {
         const col = i % 15
         const row = Math.floor(i / 15)
@@ -126,17 +139,19 @@ function initNodes() {
 function runSimulation() {
     if (!graphData) return
     
+    const cvs = document.getElementById('graph-canvas')
+    const cw = cvs.width
+    const ch = cvs.height
+    
     const filtered = getFilteredNodes()
     const nodeList = Object.values(nodes)
     
-    // Run multiple iterations for spread
     for (let iter = 0; iter < 30; iter++) {
         nodeList.forEach(node => {
             if (draggedNode && node.id === draggedNode.id) return
             
             let fx = 0, fy = 0
             
-            // Repulsion from all other nodes
             nodeList.forEach(other => {
                 if (other.id === node.id) return
                 const dx = node.x - other.x
@@ -148,7 +163,6 @@ function runSimulation() {
                 }
             })
             
-            // Attraction along links
             links.forEach(link => {
                 let other = null
                 if (link.from === node.id) other = nodes[link.to]
@@ -161,19 +175,16 @@ function runSimulation() {
                 fy += dy * 0.008
             })
             
-            // Center gravity
-            fx += (WIDTH/2 - node.x) * 0.003
-            fy += (HEIGHT/2 - node.y) * 0.003
+            fx += (cw/2 - node.x) * 0.003
+            fy += (ch/2 - node.y) * 0.003
             
-            // Apply
             node.vx = (node.vx + fx) * 0.85
             node.vy = (node.vy + fy) * 0.85
             node.x += node.vx
             node.y += node.vy
             
-            // Bounds
-            node.x = Math.max(40, Math.min(WIDTH-40, node.x))
-            node.y = Math.max(40, Math.min(HEIGHT-40, node.y))
+            node.x = Math.max(40, Math.min(cw-40, node.x))
+            node.y = Math.max(40, Math.min(ch-40, node.y))
         })
     }
 }
@@ -190,7 +201,7 @@ function getFilteredNodes() {
 function draw() {
     const cvs = document.getElementById('graph-canvas')
     const ctx = cvs.getContext('2d')
-    ctx.clearRect(0, 0, WIDTH, HEIGHT)
+    ctx.clearRect(0, 0, cvs.width, cvs.height)
     
     ctx.save()
     ctx.translate(pan.x, pan.y)
@@ -221,18 +232,19 @@ function draw() {
     // Nodes
     nodeList.forEach(node => {
         const isHover = hovered && hovered.id === node.id
+        const isSelected = selected && selected.id === node.id
         const isSearch = searchQuery && node.label.toLowerCase().includes(searchQuery)
         
         ctx.beginPath()
         ctx.fillStyle = node.type === 'class' ? '#c42' : '#38c'
-        ctx.strokeStyle = isHover ? '#f64' : (isSearch ? '#fa0' : '#e54')
-        ctx.lineWidth = isHover ? 2.5 : 1.5
-        ctx.arc(node.x, node.y, isHover ? 10 : 7, 0, Math.PI * 2)
+        ctx.strokeStyle = isSelected ? '#ff0' : (isHover ? '#f64' : (isSearch ? '#fa0' : '#e54'))
+        ctx.lineWidth = isSelected ? 3 : (isHover ? 2.5 : 1.5)
+        ctx.arc(node.x, node.y, isSelected ? 11 : (isHover ? 10 : 7), 0, Math.PI * 2)
         ctx.fill()
         ctx.stroke()
         
         // Label
-        ctx.fillStyle = isHover ? '#fff' : '#aaa'
+        ctx.fillStyle = (isSelected || isHover) ? '#fff' : '#aaa'
         ctx.font = '9px sans-serif'
         ctx.textAlign = 'center'
         const label = node.label.length > 14 ? node.label.slice(0,11)+'...' : node.label
@@ -244,14 +256,16 @@ function draw() {
     // Footer
     ctx.fillStyle = '#556'
     ctx.font = '10px sans-serif'
-    ctx.fillText('Drag nodes to move | Scroll: zoom | Right-drag: pan | Filter: class/function', 8, HEIGHT - 10)
+    ctx.fillText('Click node: details | Drag: move | Scroll: zoom | Right-drag: pan', 8, cvs.height - 10)
 }
 
 function getPos(e, cvs) {
     const r = cvs.getBoundingClientRect()
+    const scaleX = cvs.width / r.width
+    const scaleY = cvs.height / r.height
     return {
-        x: (e.clientX - r.left - pan.x) / scale,
-        y: (e.clientY - r.top - pan.y) / scale
+        x: ((e.clientX - r.left) * scaleX - pan.x) / scale,
+        y: ((e.clientY - r.top) * scaleY - pan.y) / scale
     }
 }
 
@@ -263,6 +277,46 @@ function findNode(x, y) {
         if (dx*dx + dy*dy < 150) return n
     }
     return null
+}
+
+function showNodeDetails(node) {
+    const section = document.getElementById('node-details-section')
+    const details = document.getElementById('node-details')
+    
+    if (!node) {
+        section.style.display = 'none'
+        return
+    }
+    
+    section.style.display = 'block'
+    
+    let propsHtml = ''
+    if (node.props) {
+        for (const [key, val] of Object.entries(node.props)) {
+            if (key !== 'name') {
+                propsHtml += `<div class="prop"><span class="prop-key">${key}:</span> <span class="prop-val">${val}</span></div>`
+            }
+        }
+    }
+    
+    const connected = links.filter(l => l.from === node.id || l.to === node.id)
+    let connectionsHtml = ''
+    connected.forEach(link => {
+        const otherId = link.from === node.id ? link.to : link.from
+        const other = nodes[otherId]
+        const direction = link.from === node.id ? '→' : '←'
+        if (other) {
+            connectionsHtml += `<div class="connection">${direction} ${link.type} ${other.label}</div>`
+        }
+    })
+    
+    details.innerHTML = `
+        <div class="node-name">${node.label}</div>
+        <div class="node-type">${node.type}</div>
+        <div class="node-id">ID: ${node.id}</div>
+        ${propsHtml ? '<div class="props-section">' + propsHtml + '</div>' : ''}
+        ${connectionsHtml ? '<div class="connections-section"><h4>Connections</h4>' + connectionsHtml + '</div>' : ''}
+    `
 }
 
 async function parseRepo() {

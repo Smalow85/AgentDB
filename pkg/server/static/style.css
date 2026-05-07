@@ -226,3 +226,59 @@ body {
     border-radius: 8px;
     flex: 1;
 }
+
+/* Node Details */
+#node-details {
+    font-size: 13px;
+}
+
+#node-details .node-name {
+    font-size: 16px;
+    font-weight: bold;
+    color: var(--accent);
+    margin-bottom: 4px;
+}
+
+#node-details .node-type {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
+#node-details .node-id {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+}
+
+#node-details .props-section,
+#node-details .connections-section {
+    margin-top: 12px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+}
+
+#node-details .prop {
+    margin-bottom: 4px;
+}
+
+#node-details .prop-key {
+    color: var(--text-secondary);
+}
+
+#node-details .prop-val {
+    color: var(--text-primary);
+}
+
+#node-details h4 {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+}
+
+#node-details .connection {
+    font-size: 12px;
+    padding: 3px 0;
+    color: var(--text-primary);
+}

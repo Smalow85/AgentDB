@@ -184,3 +184,48 @@ func (s *GraphStore) GetAllEdges() ([]*Edge, error) {
     }
     return all, nil
 }
+
+// SaveMeta сохраняет метаданные хранилища (границы страниц)
+func (s *GraphStore) SaveMeta() error {
+    meta := map[string]uint64{
+        "next_node_page": s.nextNodePage,
+        "next_edge_page": s.nextEdgePage,
+    }
+    data, _ := json.Marshal(meta)
+
+    page := storage.NewPage(MetaPageID)
+    copy(page.Data[:], data)
+    page.Dirty = true
+    return s.Disk.WritePage(page)
+}
+
+// LoadMeta загружает метаданные хранилища
+func (s *GraphStore) LoadMeta() error {
+    page, err := s.Disk.ReadPage(MetaPageID)
+    if err != nil {
+        return err
+    }
+
+    // Metadata is stored after header + slot area (offset 48)
+    offset := storage.HeaderSize + 24
+    
+    // Read length prefix
+    length := binary.LittleEndian.Uint32(page.Data[offset:offset+4])
+    if length == 0 || length > storage.PageSize {
+        return nil
+    }
+    
+    var meta struct {
+        NextNodePage uint64 `json:"next_node_page"`
+        NextEdgePage uint64 `json:"next_edge_page"`
+    }
+    json.Unmarshal(page.Data[offset+4:int(offset+4)+int(length)], &meta)
+
+    if meta.NextNodePage > 0 {
+        s.nextNodePage = meta.NextNodePage
+    }
+    if meta.NextEdgePage > 0 {
+        s.nextEdgePage = meta.NextEdgePage
+    }
+    return nil
+}

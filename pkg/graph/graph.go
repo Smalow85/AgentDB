@@ -233,35 +233,11 @@ func (g *Graph) GetNeighbors(nodeID int64, dir Direction) []*Node {
     return nodes
 }
 
-// Load загружает граф с диска
 func (g *Graph) Load() error {
-// Загружаем метаданные
-    pageID := uint64(0)
-    page, err := g.Store.Disk.ReadPage(pageID)
-    if err != nil {
+    // Загружаем метаданные хранилища
+    if err := g.Store.LoadMeta(); err != nil {
         return err
     }
-    offset := storage.HeaderSize + 24
-    metaLen := binary.LittleEndian.Uint32(page.Data[offset:offset+4])
-    if metaLen == 0 || metaLen > 4096 {
-        return fmt.Errorf("метаданные не найдены")
-    }
-    var meta struct {
-        Name          string `json:"name"`
-        NextNodeID    int64  `json:"next_node_id"`
-        NextEdgeID    int64  `json:"next_edge_id"`
-        NextRefID     int64  `json:"next_ref_id"`
-        NextNodePage  uint64 `json:"next_node_page"`
-        NextEdgePage uint64 `json:"next_edge_page"`
-    }
-    json.Unmarshal(page.Data[offset+4:int(offset+4)+int(metaLen)], &meta)
-    g.Name = meta.Name
-    g.nextNodeID = meta.NextNodeID
-    g.nextEdgeID = meta.NextEdgeID
-    g.nextRefID = meta.NextRefID
-    // Восстанавливаем счётчики страниц
-    g.Store.nextNodePage = meta.NextNodePage
-    g.Store.nextEdgePage = meta.NextEdgePage
 
     // Загружаем узлы
     nodes, err := g.Store.GetAllNodes()
@@ -270,6 +246,10 @@ func (g *Graph) Load() error {
     }
     for _, node := range nodes {
         g.nodeByID[node.ID] = node
+        if node.ID >= g.nextNodeID {
+            g.nextNodeID = node.ID + 1
+        }
+        // Восстанавливаем индексы
         for _, label := range node.Labels {
             g.nodeByLabel[label] = append(g.nodeByLabel[label], node.ID)
         }
@@ -291,25 +271,30 @@ func (g *Graph) Load() error {
         if strings.HasPrefix(edge.Type, "_ref_") {
             // Это Reference
             refType := strings.TrimPrefix(edge.Type, "_ref_")
-            resolved := true
-            if r, ok := edge.Properties["is_resolved"].(bool); ok {
-                resolved = r
-            }
             ref := &Reference{
                 ID:         edge.ID - 1000000,
                 SourceID:   edge.FromID,
                 TargetID:   edge.ToID,
                 Type:       refType,
-                IsResolved: resolved,
+                IsResolved: true,
+            }
+            if props, ok := edge.Properties["is_resolved"].(bool); ok {
+                ref.IsResolved = props
             }
             g.refByID[ref.ID] = ref
             g.refBySource[ref.SourceID] = append(g.refBySource[ref.SourceID], ref.ID)
             g.refByTarget[ref.TargetID] = append(g.refByTarget[ref.TargetID], ref.ID)
+            if ref.ID >= g.nextRefID {
+                g.nextRefID = ref.ID + 1
+            }
         } else {
             g.edgeByID[edge.ID] = edge
             g.edgeByType[edge.Type] = append(g.edgeByType[edge.Type], edge.ID)
             g.edgeByFrom[edge.FromID] = append(g.edgeByFrom[edge.FromID], edge.ID)
             g.edgeByTo[edge.ToID] = append(g.edgeByTo[edge.ToID], edge.ID)
+            if edge.ID >= g.nextEdgeID {
+                g.nextEdgeID = edge.ID + 1
+            }
         }
     }
 
@@ -583,7 +568,6 @@ func (g *Graph) SaveToDisk() error {
     return g.Store.Disk.WritePage(page)
 }
 
-// ResolveCallWithContext ищет функцию с учётом контекста (класса)
 func (g *Graph) ResolveCallWithContext(callNodeID, scopeNodeID int64, contextName string) (*Reference, error) {
     callNode := g.GetNode(callNodeID)
     if callNode == nil {
@@ -595,12 +579,10 @@ func (g *Graph) ResolveCallWithContext(callNodeID, scopeNodeID int64, contextNam
         return nil, fmt.Errorf("у вызова %d нет имени", callNodeID)
     }
 
-    // 1. Если есть контекст (вызов внутри метода класса), ищем метод в том же классе
+    // 1. Если есть контекст (класс), ищем метод в этом классе
     if contextName != "" {
-        // Найти класс по имени контекста
         classes := g.FindNodes(Query{Label: "class", Property: "name", Value: contextName})
         for _, class := range classes {
-            // Ищем метод в этом классе
             methods := g.GetNeighbors(class.ID, DirectionOutgoing)
             for _, m := range methods {
                 if m.HasLabel("function") {
@@ -612,13 +594,13 @@ func (g *Graph) ResolveCallWithContext(callNodeID, scopeNodeID int64, contextNam
         }
     }
 
-    // 2. Ищем среди всех функций (глобально)
+    // 2. Глобальный поиск
     funcs := g.FindNodes(Query{Label: "function", Property: "name", Value: callName})
     if len(funcs) > 0 {
         return g.AddReference(callNodeID, funcs[0].ID, "call")
     }
 
-    // 3. Неразрешённая ссылка
+    // 3. Неразрешённая
     ref := &Reference{
         ID:         g.nextRefID,
         SourceID:   callNodeID,
@@ -629,4 +611,52 @@ func (g *Graph) ResolveCallWithContext(callNodeID, scopeNodeID int64, contextNam
     g.refByID[ref.ID] = ref
     g.refBySource[callNodeID] = append(g.refBySource[callNodeID], ref.ID)
     return ref, nil
+}
+
+// GetCallersByName возвращает имена функций, которые вызывают функцию с заданным именем
+func (g *Graph) GetCallersByName(funcName string) []string {
+    calls := g.FindNodes(Query{Label: "call", Property: "name", Value: funcName})
+    var callers []string
+    seen := make(map[string]bool)
+
+    for _, call := range calls {
+        edges := g.GetEdges(call.ID, DirectionIncoming)
+        for _, edge := range edges {
+            if edge.Type == "contains" {
+                parent := g.GetNode(edge.FromID)
+                if parent != nil && parent.HasLabel("function") {
+                    name, _ := parent.GetProp("name")
+                    n := fmt.Sprintf("%v", name)
+                    if !seen[n] {
+                        callers = append(callers, n)
+                        seen[n] = true
+                    }
+                }
+            }
+        }
+    }
+    return callers
+}
+
+// GetCalleesByName возвращает имена функций, которые вызываются из метода
+func (g *Graph) GetCalleesByName(funcName string) []string {
+    funcs := g.FindNodes(Query{Label: "function", Property: "name", Value: funcName})
+    var callees []string
+    seen := make(map[string]bool)
+
+    for _, fn := range funcs {
+        // Найти call-узлы внутри этой функции
+        children := g.GetNeighbors(fn.ID, DirectionOutgoing)
+        for _, child := range children {
+            if child.HasLabel("call") {
+                name, _ := child.GetProp("name")
+                n := fmt.Sprintf("%v", name)
+                if !seen[n] {
+                    callees = append(callees, n)
+                    seen[n] = true
+                }
+            }
+        }
+    }
+    return callees
 }

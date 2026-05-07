@@ -207,23 +207,21 @@ func (s *Server) handlePSIQuery(w http.ResponseWriter, r *http.Request) {
         }
 
     case "callers":
-        funcs := s.PSIGraph.FindNodes(graph.Query{
-            Label: "function", Property: "name", Value: req.Name,
-        })
-        if len(funcs) > 0 {
-            callers := s.PSIGraph.GetCallers(funcs[0].ID)
-            var result []string
-            for _, c := range callers {
-                name, _ := c.GetProp("name")
-                result = append(result, fmt.Sprintf("%v", name))
-            }
-            writeJSON(w, map[string]interface{}{
-                "function": req.Name,
-                "callers":  result,
-            })
-            return
-        }
-    }
+		callers := s.PSIGraph.GetCallersByName(req.Name)
+		writeJSON(w, map[string]interface{}{
+			"function": req.Name,
+			"callers":  callers,
+		})
+		return
+
+	case "callees":
+		callees := s.PSIGraph.GetCalleesByName(req.Name)
+		writeJSON(w, map[string]interface{}{
+			"function": req.Name,
+			"callees":  callees,
+		})
+		return
+	}
 
     writeJSON(w, map[string]string{"error": "не найдено"})
 }
@@ -251,7 +249,9 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 
 	classes := s.PSIGraph.FindNodes(graph.Query{Label: "class"})
 	functions := s.PSIGraph.FindNodes(graph.Query{Label: "function"})
+	calls := s.PSIGraph.FindNodes(graph.Query{Label: "call"})
 	allNodes := append(classes, functions...)
+	allNodes = append(allNodes, calls...)
 
 	for _, node := range allNodes {
 		if seen[node.ID] {
@@ -263,7 +263,9 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		if node.HasLabel("class") {
 			nodeType = "class"
 		}
-
+		if node.HasLabel("call") {
+			nodeType = "call"
+		}
 		name, _ := node.GetProp("name")
 		result.Nodes = append(result.Nodes, GraphNode{
 			ID:    node.ID,
@@ -280,18 +282,6 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 				To:   edge.ToID,
 				Type: edge.Type,
 			})
-		}
-
-		// References
-		refs := s.PSIGraph.GetReferences(node.ID, graph.DirectionOutgoing)
-		for _, ref := range refs {
-			if ref.IsResolved {
-				result.Edges = append(result.Edges, GraphEdge{
-					From: ref.SourceID,
-					To:   ref.TargetID,
-					Type: "calls",
-				})
-			}
 		}
 	}
 

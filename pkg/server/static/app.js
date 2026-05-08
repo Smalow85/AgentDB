@@ -236,7 +236,8 @@ function draw() {
         const isSearch = searchQuery && node.label.toLowerCase().includes(searchQuery)
         
         ctx.beginPath()
-        ctx.fillStyle = node.type === 'class' ? '#c42' : '#38c'
+        const colors = { file: '#4a4', class: '#c42', function: '#38c', call: '#949' }
+        ctx.fillStyle = colors[node.type] || '#38c'
         ctx.strokeStyle = isSelected ? '#ff0' : (isHover ? '#f64' : (isSearch ? '#fa0' : '#e54'))
         ctx.lineWidth = isSelected ? 3 : (isHover ? 2.5 : 1.5)
         ctx.arc(node.x, node.y, isSelected ? 11 : (isHover ? 10 : 7), 0, Math.PI * 2)

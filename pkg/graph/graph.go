@@ -234,22 +234,36 @@ func (g *Graph) GetNeighbors(nodeID int64, dir Direction) []*Node {
 }
 
 func (g *Graph) Load() error {
-    // Загружаем метаданные хранилища
-    if err := g.Store.LoadMeta(); err != nil {
-        return err
-    }
-
-    // Загружаем узлы
-    nodes, err := g.Store.GetAllNodes()
+    // Читаем страницу 0 (метаданные)
+    page, err := g.Store.Disk.ReadPage(0)
     if err != nil {
         return err
     }
+
+    offset := storage.HeaderSize + 24
+    length := binary.LittleEndian.Uint32(page.Data[offset : offset+4])
+    
+    var meta struct {
+        Name          string
+        NextNodeID    int64
+        NextEdgeID    int64
+        NextRefID     int64
+        NextNodePage  uint64
+        NextEdgePage  uint64
+    }
+    json.Unmarshal(page.Data[offset+4:offset+4+int(length)], &meta)
+
+    g.Name = meta.Name
+    if meta.NextNodeID > 0 { g.nextNodeID = meta.NextNodeID }
+    if meta.NextEdgeID > 0 { g.nextEdgeID = meta.NextEdgeID }
+    if meta.NextRefID > 0 { g.nextRefID = meta.NextRefID }
+    if meta.NextNodePage > 0 { g.Store.nextNodePage = meta.NextNodePage }
+    if meta.NextEdgePage > 0 { g.Store.nextEdgePage = meta.NextEdgePage }
+
+    // Узлы
+    nodes, _ := g.Store.GetAllNodes()
     for _, node := range nodes {
         g.nodeByID[node.ID] = node
-        if node.ID >= g.nextNodeID {
-            g.nextNodeID = node.ID + 1
-        }
-        // Восстанавливаем индексы
         for _, label := range node.Labels {
             g.nodeByLabel[label] = append(g.nodeByLabel[label], node.ID)
         }
@@ -262,14 +276,10 @@ func (g *Graph) Load() error {
         }
     }
 
-    // Загружаем рёбра
-    edges, err := g.Store.GetAllEdges()
-    if err != nil {
-        return err
-    }
+    // Рёбра
+    edges, _ := g.Store.GetAllEdges()
     for _, edge := range edges {
         if strings.HasPrefix(edge.Type, "_ref_") {
-            // Это Reference
             refType := strings.TrimPrefix(edge.Type, "_ref_")
             ref := &Reference{
                 ID:         edge.ID - 1000000,
@@ -284,20 +294,15 @@ func (g *Graph) Load() error {
             g.refByID[ref.ID] = ref
             g.refBySource[ref.SourceID] = append(g.refBySource[ref.SourceID], ref.ID)
             g.refByTarget[ref.TargetID] = append(g.refByTarget[ref.TargetID], ref.ID)
-            if ref.ID >= g.nextRefID {
-                g.nextRefID = ref.ID + 1
-            }
         } else {
             g.edgeByID[edge.ID] = edge
             g.edgeByType[edge.Type] = append(g.edgeByType[edge.Type], edge.ID)
             g.edgeByFrom[edge.FromID] = append(g.edgeByFrom[edge.FromID], edge.ID)
             g.edgeByTo[edge.ToID] = append(g.edgeByTo[edge.ToID], edge.ID)
-            if edge.ID >= g.nextEdgeID {
-                g.nextEdgeID = edge.ID + 1
-            }
         }
     }
 
+    fmt.Printf("✓ Загружен граф: %d узлов, %d рёбер\n", len(g.nodeByID), len(g.edgeByID))
     return nil
 }
 
@@ -659,4 +664,64 @@ func (g *Graph) GetCalleesByName(funcName string) []string {
         }
     }
     return callees
+}
+
+// FindCallPath ищет путь между двумя функциями по вызовам
+func (g *Graph) FindCallPath(fromName, toName string) ([][]string, error) {
+    fromNodes := g.FindNodes(Query{Label: "function", Property: "name", Value: fromName})
+    toNodes := g.FindNodes(Query{Label: "function", Property: "name", Value: toName})
+
+    if len(fromNodes) == 0 {
+        return nil, fmt.Errorf("функция '%s' не найдена", fromName)
+    }
+    if len(toNodes) == 0 {
+        return nil, fmt.Errorf("функция '%s' не найдена", toName)
+    }
+
+    var allPaths [][]string
+    visited := make(map[int64]bool)
+
+    for _, from := range fromNodes {
+        for _, to := range toNodes {
+            paths := g.findCallPaths(from.ID, to.ID, []string{fromName}, visited, 10)
+            allPaths = append(allPaths, paths...)
+        }
+    }
+
+    return allPaths, nil
+}
+
+func (g *Graph) findCallPaths(currentID, targetID int64, currentPath []string, visited map[int64]bool, maxDepth int) [][]string {
+    if len(currentPath) > maxDepth {
+        return nil
+    }
+
+    if currentID == targetID {
+        pathCopy := make([]string, len(currentPath))
+        copy(pathCopy, currentPath)
+        return [][]string{pathCopy}
+    }
+
+    visited[currentID] = true
+    defer delete(visited, currentID)
+
+    var allPaths [][]string
+
+    // Ищем вызовы из текущей функции
+    children := g.GetNeighbors(currentID, DirectionOutgoing)
+    for _, child := range children {
+        if child.HasLabel("call") && !visited[child.ID] {
+            callName, _ := child.GetProp("name")
+            callNameStr := fmt.Sprintf("%v", callName)
+
+            // Найти функцию с таким именем
+            targetFuncs := g.FindNodes(Query{Label: "function", Property: "name", Value: callNameStr})
+            for _, tf := range targetFuncs {
+                paths := g.findCallPaths(tf.ID, targetID, append(currentPath, callNameStr), visited, maxDepth)
+                allPaths = append(allPaths, paths...)
+            }
+        }
+    }
+
+    return allPaths
 }

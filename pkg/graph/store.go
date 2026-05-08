@@ -1,6 +1,7 @@
 package graph
 
 import (
+    "fmt"
     "encoding/binary"
     "encoding/json"
 
@@ -154,13 +155,16 @@ func (s *GraphStore) GetAllNodes() ([]*Node, error) {
         if err != nil {
             break
         }
-        offset := storage.HeaderSize + 24
-        length := binary.LittleEndian.Uint32(page.Data[offset:offset+4])
-        if length == 0 || length > storage.PageSize {
+        length := binary.LittleEndian.Uint32(page.Data[0:4])
+        if length == 0 || length > PageSize-4 {
             continue
         }
+        end := 4 + length
+        if end > PageSize {
+            end = PageSize
+        }
         var nodes []*Node
-        json.Unmarshal(page.Data[offset+4:int(offset+4)+int(length)], &nodes)
+        json.Unmarshal(page.Data[4:end], &nodes)
         all = append(all, nodes...)
     }
     return all, nil
@@ -173,54 +177,45 @@ func (s *GraphStore) GetAllEdges() ([]*Edge, error) {
         if err != nil {
             break
         }
-        offset := storage.HeaderSize + 24
-        length := binary.LittleEndian.Uint32(page.Data[offset:offset+4])
-        if length == 0 || length > storage.PageSize {
+        length := binary.LittleEndian.Uint32(page.Data[0:4])
+        if length == 0 || length > PageSize-4 {
             continue
         }
+        end := 4 + length
+        if end > PageSize {
+            end = PageSize
+        }
         var edges []*Edge
-        json.Unmarshal(page.Data[offset+4:int(offset+4)+int(length)], &edges)
+        json.Unmarshal(page.Data[4:end], &edges)
         all = append(all, edges...)
     }
     return all, nil
 }
 
-// SaveMeta сохраняет метаданные хранилища (границы страниц)
 func (s *GraphStore) SaveMeta() error {
+    fmt.Printf("[DEBUG SaveMeta] nextNodePage=%d nextEdgePage=%d\n", s.nextNodePage, s.nextEdgePage)
     meta := map[string]uint64{
         "next_node_page": s.nextNodePage,
         "next_edge_page": s.nextEdgePage,
     }
     data, _ := json.Marshal(meta)
-
     page := storage.NewPage(MetaPageID)
     copy(page.Data[:], data)
     page.Dirty = true
     return s.Disk.WritePage(page)
 }
 
-// LoadMeta загружает метаданные хранилища
 func (s *GraphStore) LoadMeta() error {
     page, err := s.Disk.ReadPage(MetaPageID)
     if err != nil {
         return err
     }
-
-    // Metadata is stored after header + slot area (offset 48)
-    offset := storage.HeaderSize + 24
-    
-    // Read length prefix
-    length := binary.LittleEndian.Uint32(page.Data[offset:offset+4])
-    if length == 0 || length > storage.PageSize {
-        return nil
-    }
-    
     var meta struct {
-        NextNodePage uint64 `json:"next_node_page"`
-        NextEdgePage uint64 `json:"next_edge_page"`
+        NextNodePage uint64
+        NextEdgePage uint64
     }
-    json.Unmarshal(page.Data[offset+4:int(offset+4)+int(length)], &meta)
-
+    json.Unmarshal(page.Data[:], &meta)
+    fmt.Printf("[DEBUG LoadMeta] nextNodePage=%d nextEdgePage=%d\n", meta.NextNodePage, meta.NextEdgePage)
     if meta.NextNodePage > 0 {
         s.nextNodePage = meta.NextNodePage
     }

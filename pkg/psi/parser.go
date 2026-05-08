@@ -22,7 +22,7 @@ func NewPSIParser(g *graph.Graph) *PSIParser {
 }
 
 func (p *PSIParser) ParseRepo(repoPath string) error {
-	return filepath.Walk(repoPath, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(repoPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return err
 		}
@@ -32,6 +32,12 @@ func (p *PSIParser) ParseRepo(repoPath string) error {
 		}
 		return p.ParseFile(path, lang)
 	})
+	if err != nil {
+		return err
+	}
+	// После парсинга всех файлов резолвим вызовы
+	p.resolveAllCalls()
+	return nil
 }
 
 func (p *PSIParser) ParseFile(filePath string, lang *LanguageInfo) error {
@@ -57,7 +63,6 @@ func (p *PSIParser) ParseFile(filePath string, lang *LanguageInfo) error {
 
 	// Связываем методы с классами
 	p.linkMethodsToClasses()
-
 	return nil
 }
 
@@ -108,6 +113,22 @@ func (p *PSIParser) walkNode(parentID int64, node *gotreesitter.Node, source str
 			funcNode, _ := p.Graph.AddNode([]string{"function"}, map[string]interface{}{
 				"name":  name,
 				"class": contextName,
+			})
+			p.Graph.AddEdge("contains", parentID, funcNode.ID)
+			for i := 0; i < int(node.ChildCount()); i++ {
+				child := node.Child(i)
+				if child != nil {
+					p.walkNode(funcNode.ID, child, source, contextName)
+				}
+			}
+		}
+
+	case "function_declaration":
+		// Package-level функция (без ресивера)
+		name := extractName(node, source, p.lang)
+		if name != "" {
+			funcNode, _ := p.Graph.AddNode([]string{"function"}, map[string]interface{}{
+				"name": name,
 			})
 			p.Graph.AddEdge("contains", parentID, funcNode.ID)
 			for i := 0; i < int(node.ChildCount()); i++ {
@@ -245,28 +266,19 @@ func extractCallName(node *gotreesitter.Node, source string, lang *gotreesitter.
 
 func (p *PSIParser) resolveAllCalls() {
     calls := p.Graph.FindNodes(graph.Query{Label: "call"})
-    fmt.Printf("[DEBUG] resolveAllCalls: %d вызовов\n", len(calls))
-    
     for _, call := range calls {
         refs := p.Graph.GetReferences(call.ID, graph.DirectionOutgoing)
         if len(refs) > 0 {
             continue
         }
 
-        callName, _ := call.GetProp("name")
         contextName, _ := call.GetProp("context")
-        
-        fmt.Printf("[DEBUG] Резолвим вызов '%v' (context=%v)\n", callName, contextName)
 
         if contextName != nil && contextName != "" {
             p.Graph.ResolveCallWithContext(call.ID, 0, fmt.Sprintf("%v", contextName))
         } else {
             p.Graph.ResolveCall(call.ID, 0)
         }
-        
-        // Проверим что получилось
-        refs2 := p.Graph.GetReferences(call.ID, graph.DirectionOutgoing)
-        fmt.Printf("[DEBUG]   → references после резолва: %d\n", len(refs2))
     }
 }
 

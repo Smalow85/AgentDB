@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
     "os"
+	"strings"
 
 	"agent-db/pkg/executor"
 	"agent-db/pkg/graph"
@@ -55,6 +56,8 @@ func (s *Server) Start(addr string) error {
 	http.HandleFunc("/api/graph", s.handleGraph)
 	http.HandleFunc("/api/graphs", s.handleGraphList)
 	http.HandleFunc("/api/psi/query", s.handlePSIQuery)
+	http.HandleFunc("/api/psi/path", s.handlePSIPath)
+	http.HandleFunc("/api/psi/context", s.handlePSIContext)
 
 	staticFS, _ := fs.Sub(staticFiles, "static")
 	http.Handle("/", http.FileServer(http.FS(staticFS)))
@@ -247,10 +250,12 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 
 	seen := make(map[int64]bool)
 
+	files := s.PSIGraph.FindNodes(graph.Query{Label: "file"})
 	classes := s.PSIGraph.FindNodes(graph.Query{Label: "class"})
 	functions := s.PSIGraph.FindNodes(graph.Query{Label: "function"})
 	calls := s.PSIGraph.FindNodes(graph.Query{Label: "call"})
-	allNodes := append(classes, functions...)
+	allNodes := append(files, classes...)
+	allNodes = append(allNodes, functions...)
 	allNodes = append(allNodes, calls...)
 
 	for _, node := range allNodes {
@@ -260,21 +265,29 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 		seen[node.ID] = true
 
 		nodeType := "function"
-		if node.HasLabel("class") {
+		if node.HasLabel("file") {
+			nodeType = "file"
+		} else if node.HasLabel("class") {
 			nodeType = "class"
-		}
-		if node.HasLabel("call") {
+		} else if node.HasLabel("call") {
 			nodeType = "call"
 		}
-		name, _ := node.GetProp("name")
+
+		var label string
+		if name, ok := node.GetProp("name"); ok {
+			label = fmt.Sprintf("%v", name)
+		} else if path, ok := node.GetProp("path"); ok {
+			label = fmt.Sprintf("%v", path)
+		}
+
 		result.Nodes = append(result.Nodes, GraphNode{
 			ID:    node.ID,
-			Label: fmt.Sprintf("%v", name),
+			Label: label,
 			Type:  nodeType,
 			Props: node.Properties,
 		})
 
-		// Рёбра
+		// Outgoing edges
 		edges := s.PSIGraph.GetEdges(node.ID, graph.DirectionOutgoing)
 		for _, edge := range edges {
 			result.Edges = append(result.Edges, GraphEdge{
@@ -282,6 +295,18 @@ func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {
 				To:   edge.ToID,
 				Type: edge.Type,
 			})
+		}
+
+		// References as edges
+		refs := s.PSIGraph.GetReferences(node.ID, graph.DirectionOutgoing)
+		for _, ref := range refs {
+			if ref.IsResolved {
+				result.Edges = append(result.Edges, GraphEdge{
+					From: ref.SourceID,
+					To:   ref.TargetID,
+					Type: ref.Type,
+				})
+			}
 		}
 	}
 
@@ -304,6 +329,85 @@ func (s *Server) handleGraphList(w http.ResponseWriter, r *http.Request) {
 			},
 		},
 	})
+}
+
+func (s *Server) handlePSIPath(w http.ResponseWriter, r *http.Request) {
+    var req struct {
+        From string `json:"from"`
+        To   string `json:"to"`
+    }
+    json.NewDecoder(r.Body).Decode(&req)
+
+    paths, err := s.PSIGraph.FindCallPath(req.From, req.To)
+    if err != nil {
+        writeJSON(w, map[string]string{"error": err.Error()})
+        return
+    }
+
+    writeJSON(w, map[string]interface{}{
+        "from":  req.From,
+        "to":    req.To,
+        "paths": paths,
+    })
+}
+
+func (s *Server) handlePSIContext(w http.ResponseWriter, r *http.Request) {
+    classes := s.PSIGraph.FindNodes(graph.Query{Label: "class"})
+    functions := s.PSIGraph.FindNodes(graph.Query{Label: "function"})
+    calls := s.PSIGraph.FindNodes(graph.Query{Label: "call"})
+
+    var sb strings.Builder
+
+    sb.WriteString("=== Структура проекта ===\n\n")
+
+    for _, class := range classes {
+        name, _ := class.GetProp("name")
+        sb.WriteString(fmt.Sprintf("📦 Класс: %s\n", name))
+
+        // Методы класса
+        children := s.PSIGraph.GetNeighbors(class.ID, graph.DirectionOutgoing)
+        for _, child := range children {
+            if child.HasLabel("function") {
+                methodName, _ := child.GetProp("name")
+
+                // Найти вызовы внутри метода
+                grandchildren := s.PSIGraph.GetNeighbors(child.ID, graph.DirectionOutgoing)
+                var callNames []string
+                for _, gc := range grandchildren {
+                    if gc.HasLabel("call") {
+                        cn, _ := gc.GetProp("name")
+                        callNames = append(callNames, fmt.Sprintf("%v", cn))
+                    }
+                }
+
+                if len(callNames) > 0 {
+                    sb.WriteString(fmt.Sprintf("  ├─ %s() → %s\n", methodName, strings.Join(callNames, ", ")))
+                } else {
+                    sb.WriteString(fmt.Sprintf("  ├─ %s()\n", methodName))
+                }
+            }
+        }
+        sb.WriteString("\n")
+    }
+
+    // Функции без класса
+    var orphanFuncs []string
+    for _, fn := range functions {
+        class, _ := fn.GetProp("class")
+        if class == nil || class == "" {
+            name, _ := fn.GetProp("name")
+            orphanFuncs = append(orphanFuncs, fmt.Sprintf("%v", name))
+        }
+    }
+    if len(orphanFuncs) > 0 {
+        sb.WriteString("📌 Функции вне классов: " + strings.Join(orphanFuncs, ", ") + "\n")
+    }
+
+    // Статистика
+    sb.WriteString(fmt.Sprintf("\n📊 Статистика: %d классов, %d функций, %d вызовов\n",
+        len(classes), len(functions), len(calls)))
+
+    writeJSON(w, map[string]string{"context": sb.String()})
 }
 
 func writeJSON(w http.ResponseWriter, data interface{}) {

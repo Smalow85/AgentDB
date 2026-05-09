@@ -9,8 +9,17 @@ import (
 )
 
 type LLMClient struct {
-	APIKey string
-	Model  string
+	APIKey  string
+	Model   string
+	BaseURL string // "https://api.openai.com/v1"
+}
+
+func NewLLMClient(apiKey, model, baseURL string) *LLMClient {
+	return &LLMClient{
+		APIKey:  apiKey,
+		Model:   model,
+		BaseURL: baseURL,
+	}
 }
 
 func (c *LLMClient) Chat(messages []Message) (*OpenAIChatResponse, error) {
@@ -22,7 +31,8 @@ func (c *LLMClient) Chat(messages []Message) (*OpenAIChatResponse, error) {
 
 	body, _ := json.Marshal(req)
 
-	httpReq, _ := http.NewRequest("POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(body))
+	url := c.BaseURL + "/chat/completions"
+	httpReq, _ := http.NewRequest("POST", url, bytes.NewBuffer(body))
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.APIKey)
 

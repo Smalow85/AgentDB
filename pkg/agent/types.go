@@ -52,5 +52,5 @@ type AgentLoop struct {
 	PSIGraph  *graph.Graph
 	LLMKey    string
 	Model     string
-	BaseURL   string // "https://api.openai.com/v1"
+	BaseURL   string
 }

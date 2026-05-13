@@ -55,7 +55,6 @@ var keywords = map[string]bool{
 	"ORDER": true, "BY": true, "ASC": true, "DESC": true,
     "LIMIT": true, "OFFSET": true,
 	"COUNT": true, "SUM": true, "AVG": true, "MIN": true, "MAX": true,
-	"IF": true, "EXISTS": true, "AUTOINCREMENT": true,
 }
 
 func (l *Lexer) tokenize() ([]Token, error) {

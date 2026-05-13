@@ -2,57 +2,46 @@ package agent
 
 import "fmt"
 
-func (a *AgentLoop) Run(userMessage string) (string, []Message, error) {
-    llm := NewLLMClient(a.LLMKey, a.Model, a.BaseURL)
-    executor := &ToolExecutor{PSIGraph: a.PSIGraph}
+func (a *AgentLoop) Run(userMessage string) (string, error) {
+	llm := NewLLMClient(a.LLMKey, a.Model, a.BaseURL)
+	executor := &ToolExecutor{PSIGraph: a.PSIGraph}
 
-    messages := []Message{
-        {Role: "system", Content: SystemPrompt()},
-        {Role: "user", Content: userMessage},
-    }
+	messages := []Message{
+		{Role: "system", Content: SystemPrompt()},
+		{Role: "user", Content: userMessage},
+	}
 
-    var history []Message
-    history = append(history, Message{Role: "user", Content: userMessage})
+	for iteration := 0; iteration < 30; iteration++ {
+		response, err := llm.Chat(messages)
+		if err != nil {
+			return "", fmt.Errorf("ошибка LLM: %w", err)
+		}
 
-    for iteration := 0; iteration < 30; iteration++ {
-        response, err := llm.Chat(messages)
-        if err != nil {
-            return "", history, err
-        }
+		if len(response.Choices) == 0 {
+			return "", fmt.Errorf("пустой ответ от LLM")
+		}
 
-        msg := response.Choices[0].Message
+		msg := response.Choices[0].Message
 
-        // Есть tool_calls — выполняем
-        if len(msg.ToolCalls) > 0 {
-            messages = append(messages, Message{
-                Role:      "assistant",
-                ToolCalls: msg.ToolCalls,
-            })
+		if len(msg.ToolCalls) > 0 {
+			messages = append(messages, Message{
+				Role:      "assistant",
+				ToolCalls: msg.ToolCalls,
+			})
 
-            for _, tc := range msg.ToolCalls {
-                result := executor.Execute(tc)
+			for _, tc := range msg.ToolCalls {
+				result := executor.Execute(tc)
+				messages = append(messages, Message{
+					Role:       "tool",
+					Content:    result,
+					ToolCallID: tc.ID,
+				})
+			}
+			continue
+		}
 
-                messages = append(messages, Message{
-                    Role:       "tool",
-                    Content:    result,
-                    ToolCallID: tc.ID,
-                })
+		return msg.Content, nil
+	}
 
-                history = append(history, Message{
-                    Role:    "tool",
-                    Content: fmt.Sprintf("%s: %s", tc.Function.Name, result),
-                })
-            }
-            continue
-        }
-
-        // Финальный ответ
-        history = append(history, Message{
-            Role:    "assistant",
-            Content: msg.Content,
-        })
-        return msg.Content, history, nil
-    }
-
-    return "", history, fmt.Errorf("превышен лимит итераций (30)")
+	return "", fmt.Errorf("превышен лимит итераций (30)")
 }

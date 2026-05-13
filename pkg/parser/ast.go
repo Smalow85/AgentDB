@@ -56,9 +56,8 @@ func (s *SelectStatement) String() string {
 
 // InsertStatement — INSERT
 type InsertStatement struct {
-    Table   string
-    Columns []string  // новые
-    Values  []Expression
+	Table  string
+	Values []Expression
 }
 
 func (s *InsertStatement) stmt() {}
@@ -68,9 +67,8 @@ func (s *InsertStatement) String() string {
 
 // CreateTableStatement — CREATE TABLE
 type CreateTableStatement struct {
-    Table      string
-    Columns    []ColumnDef
-    IfNotExists bool  // новое
+	Table   string
+	Columns []ColumnDef
 }
 
 func (s *CreateTableStatement) stmt() {}
@@ -80,15 +78,14 @@ func (s *CreateTableStatement) String() string {
 
 // ColumnDef в CREATE TABLE
 type ColumnDef struct {
-    Name          string
-    Type          string
-    NotNull       bool
-    PrimaryKey    bool
-    AutoIncrement bool  // ← новое
-    Unique        bool
-    Default       string
-    Check         string
-    References    string
+	Name       string
+	Type       string
+	NotNull    bool
+	PrimaryKey bool
+	Unique     bool
+	Default    string   // значение по умолчанию как строка
+	Check      string   // условие CHECK как строка
+	References string   // "table(column)" для FOREIGN KEY
 }
 
 // Expression — значение в INSERT/SET
@@ -181,13 +178,4 @@ type FuncCall struct {
 func (f *FuncCall) expr() {}
 func (f *FuncCall) String() string {
     return fmt.Sprintf("%s(%s)", f.Name, f.Argument)
-}
-
-type DropTableStatement struct {
-    Table string
-}
-
-func (s *DropTableStatement) stmt() {}
-func (s *DropTableStatement) String() string {
-    return fmt.Sprintf("DROP TABLE %s", s.Table)
 }

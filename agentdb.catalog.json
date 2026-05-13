@@ -1,42 +1,35 @@
 {
-  "orders": {
-    "Name": "orders",
+  "_sequences": {
+    "Name": "_sequences",
     "Columns": [
       {
-        "Name": "id",
-        "ColType": 0,
+        "Name": "table_name",
+        "ColType": 2,
         "Nullable": false,
         "PrimaryKey": true,
+        "AutoIncrement": false,
         "Unique": false,
         "Default": "",
         "Check": "",
         "References": ""
       },
       {
-        "Name": "user_id",
-        "ColType": 0,
-        "Nullable": true,
-        "PrimaryKey": false,
-        "Unique": false,
-        "Default": "",
-        "Check": "",
-        "References": ""
-      },
-      {
-        "Name": "amount",
-        "ColType": 1,
-        "Nullable": true,
-        "PrimaryKey": false,
-        "Unique": false,
-        "Default": "",
-        "Check": "",
-        "References": ""
-      },
-      {
-        "Name": "product",
+        "Name": "col_name",
         "ColType": 2,
         "Nullable": true,
         "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "next_val",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
         "Unique": false,
         "Default": "",
         "Check": "",
@@ -44,14 +37,485 @@
       }
     ]
   },
-  "products": {
-    "Name": "products",
+  "inference_evidence": {
+    "Name": "inference_evidence",
     "Columns": [
       {
         "Name": "id",
         "ColType": 0,
         "Nullable": false,
         "PrimaryKey": true,
+        "AutoIncrement": true,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "inference_id",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "buffer_id",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "thought_id",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      }
+    ]
+  },
+  "instruction_stack": {
+    "Name": "instruction_stack",
+    "Columns": [
+      {
+        "Name": "id",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": true,
+        "AutoIncrement": true,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "session_id",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "epoch",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "rolled_back",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "0",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "parent_id",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "depth",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "0",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "content",
+        "ColType": 2,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      }
+    ]
+  },
+  "metaspace": {
+    "Name": "metaspace",
+    "Columns": [
+      {
+        "Name": "id",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": true,
+        "AutoIncrement": true,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "agent_id",
+        "ColType": 2,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "version",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "content_type",
+        "ColType": 2,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "content",
+        "ColType": 2,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "priority",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "0",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "is_active",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "1",
+        "Check": "",
+        "References": ""
+      }
+    ]
+  },
+  "reasoning_space": {
+    "Name": "reasoning_space",
+    "Columns": [
+      {
+        "Name": "id",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": true,
+        "AutoIncrement": true,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "session_id",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "epoch",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "rolled_back",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "0",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "parent_instruction_id",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "parent_thought_id",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "thought_type",
+        "ColType": 2,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "content",
+        "ColType": 2,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      }
+    ]
+  },
+  "session_tools": {
+    "Name": "session_tools",
+    "Columns": [
+      {
+        "Name": "id",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": true,
+        "AutoIncrement": true,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "session_id",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "tool_id",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "loaded_at",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "expires_at",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      }
+    ]
+  },
+  "tool_calls": {
+    "Name": "tool_calls",
+    "Columns": [
+      {
+        "Name": "id",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": true,
+        "AutoIncrement": true,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "session_id",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "epoch",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "rolled_back",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "0",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "thought_id",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "tool_id",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "args",
+        "ColType": 2,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "status",
+        "ColType": 2,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "pending",
+        "Check": "",
+        "References": ""
+      }
+    ]
+  },
+  "tool_registry": {
+    "Name": "tool_registry",
+    "Columns": [
+      {
+        "Name": "id",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": true,
+        "AutoIncrement": true,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "agent_id",
+        "ColType": 2,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
         "Unique": false,
         "Default": "",
         "Check": "",
@@ -60,45 +524,44 @@
       {
         "Name": "name",
         "ColType": 2,
-        "Nullable": true,
-        "PrimaryKey": false,
-        "Unique": false,
-        "Default": "",
-        "Check": "",
-        "References": ""
-      }
-    ]
-  },
-  "users": {
-    "Name": "users",
-    "Columns": [
-      {
-        "Name": "id",
-        "ColType": 0,
         "Nullable": false,
-        "PrimaryKey": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
         "Unique": false,
         "Default": "",
         "Check": "",
         "References": ""
       },
       {
-        "Name": "name",
+        "Name": "description",
         "ColType": 2,
-        "Nullable": false,
+        "Nullable": true,
         "PrimaryKey": false,
+        "AutoIncrement": false,
         "Unique": false,
         "Default": "",
         "Check": "",
         "References": ""
       },
       {
-        "Name": "age",
+        "Name": "schema",
+        "ColType": 2,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "default_ttl",
         "ColType": 0,
         "Nullable": true,
         "PrimaryKey": false,
+        "AutoIncrement": false,
         "Unique": false,
-        "Default": "",
+        "Default": "300",
         "Check": "",
         "References": ""
       }

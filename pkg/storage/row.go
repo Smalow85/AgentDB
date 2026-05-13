@@ -20,14 +20,15 @@ const (
 
 // ColumnDef — определение колонки таблицы
 type ColumnDef struct {
-	Name       string
-	ColType    ColumnType
-	Nullable   bool // true = может быть NULL
-	PrimaryKey bool
-	Unique     bool
-	Default    string
-	Check      string
-	References string
+    Name          string
+    ColType       ColumnType
+    Nullable      bool
+    PrimaryKey    bool
+    AutoIncrement bool
+    Unique        bool
+    Default       string
+    Check         string
+    References    string
 }
 
 // TableSchema — схема таблицы

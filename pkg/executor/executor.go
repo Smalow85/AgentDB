@@ -79,47 +79,59 @@ func (e *Executor) Execute(query string) (string, error) {
 
 // executeCreate — CREATE TABLE
 func (e *Executor) executeCreate(stmt *parser.CreateTableStatement) (string, error) {
-	columns := make([]storage.ColumnDef, 0, len(stmt.Columns))
-	for _, col := range stmt.Columns {
-		colType := storage.TypeText
-		switch strings.ToUpper(col.Type) {
-		case "INT":
-			colType = storage.TypeInt
-		case "FLOAT":
-			colType = storage.TypeFloat
-		case "TEXT":
-			colType = storage.TypeText
-		case "BOOL":
-			colType = storage.TypeBool
-		default:
-			return "", fmt.Errorf("неизвестный тип: %s", col.Type)
-		}
+    columns := make([]storage.ColumnDef, 0, len(stmt.Columns))
+    for _, col := range stmt.Columns {
+        colType := storage.TypeText
+        switch strings.ToUpper(col.Type) {
+        case "INT":
+            colType = storage.TypeInt
+        case "FLOAT":
+            colType = storage.TypeFloat
+        case "TEXT":
+            colType = storage.TypeText
+        case "BOOL":
+            colType = storage.TypeBool
+        default:
+            return "", fmt.Errorf("неизвестный тип: %s", col.Type)
+        }
 
-		columns = append(columns, storage.ColumnDef{
-			Name:       col.Name,
-			ColType:    colType,
-			Nullable:   !col.NotNull, // NotNull → Nullable = false
-			PrimaryKey: col.PrimaryKey,
-			Unique:     col.Unique,
-			Default:    col.Default,
-			Check:      col.Check,
-			References: col.References,
-		})
-	}
+        columns = append(columns, storage.ColumnDef{
+            Name:          col.Name,
+            ColType:       colType,
+            Nullable:      !col.NotNull,
+            PrimaryKey:    col.PrimaryKey,
+            AutoIncrement: col.AutoIncrement,
+            Unique:        col.Unique,
+            Default:       col.Default,
+            Check:         col.Check,
+            References:    col.References,
+        })
+    }
 
-	schema := &storage.TableSchema{
-		Name:    stmt.Table,
-		Columns: columns,
-	}
+    schema := &storage.TableSchema{
+        Name:    stmt.Table,
+        Columns: columns,
+    }
 
-	if err := e.Catalog.AddTable(schema); err != nil {
-		return "", fmt.Errorf("ошибка сохранения каталога: %w", err)
-	}
+    // Сохраняем через catalog
+    if err := e.Catalog.AddTable(schema); err != nil {
+        return "", fmt.Errorf("ошибка сохранения каталога: %w", err)
+    }
 
-	heap := storage.NewHeapFile(schema, e.BP, e.Disk)
-	e.Tables[stmt.Table] = heap
+    heap := storage.NewHeapFile(schema, e.BP, e.Disk)
+    e.Tables[stmt.Table] = heap
 
-	return fmt.Sprintf("✓ Таблица '%s' создана (%d колонок)", stmt.Table, len(columns)), nil
+    // ← ВОТ СЮДА: инициализируем счётчики для автоинкремента
+    for _, col := range columns {
+        if col.AutoIncrement {
+            e.Execute(fmt.Sprintf(
+                "INSERT INTO _sequences (table_name, col_name, next_val) VALUES ('%s', '%s', 1)",
+                stmt.Table, col.Name,
+            ))
+        }
+    }
+
+    return fmt.Sprintf("✓ Таблица '%s' создана (%d колонок)", stmt.Table, len(columns)), nil
 }
 
 // executeCreateIndex — CREATE INDEX idx ON table (column)
@@ -175,64 +187,161 @@ func (e *Executor) executeCreateIndex(stmt *parser.CreateIndexStatement) (string
 
 // executeInsert — INSERT INTO (с обновлением индексов)
 func (e *Executor) executeInsert(stmt *parser.InsertStatement) (string, error) {
-	table, ok := e.Tables[stmt.Table]
-	if !ok {
-		return "", fmt.Errorf("таблица '%s' не найдена", stmt.Table)
-	}
+    table, ok := e.Tables[stmt.Table]
+    if !ok {
+        return "", fmt.Errorf("таблица '%s' не найдена", stmt.Table)
+    }
 
-	if len(stmt.Values) != len(table.Schema.Columns) {
-		return "", fmt.Errorf("ожидается %d значений, получено %d",
-			len(table.Schema.Columns), len(stmt.Values))
-	}
+    // Если колонки указаны явно
+    if len(stmt.Columns) > 0 {
+        if len(stmt.Columns) != len(stmt.Values) {
+            return "", fmt.Errorf("ожидается %d значений для %d колонок, получено %d",
+                len(stmt.Columns), len(stmt.Columns), len(stmt.Values))
+        }
 
-	values := make([]interface{}, len(stmt.Values))
-	for i, expr := range stmt.Values {
-		lit, ok := expr.(*parser.Literal)
-		if !ok {
-			return "", fmt.Errorf("ожидается литерал, получено %T", expr)
-		}
+        // Создаём полный массив значений с учётом defaults
+        values := make([]interface{}, len(table.Schema.Columns))
+        for i := range values {
+            values[i] = nil // default NULL
+        }
 
-		colType := table.Schema.Columns[i].ColType
+		for i, col := range table.Schema.Columns {
+            if col.AutoIncrement {
+                nextID := e.getNextID(stmt.Table, col.Name)
+                values[i] = int32(nextID)
+            }
+        }
 
-		if strings.ToUpper(lit.Value) == "NULL" {
-			values[i] = nil
+        for i, colName := range stmt.Columns {
+            idx := findColumnIndex(table.Schema, colName)
+            if idx == -1 {
+                return "", fmt.Errorf("колонка '%s' не найдена в таблице '%s'", colName, stmt.Table)
+            }
+
+            lit, ok := stmt.Values[i].(*parser.Literal)
+            if !ok {
+                return "", fmt.Errorf("ожидается литерал")
+            }
+
+            val := lit.Value
+            // Убираем кавычки для строк
+            if (strings.HasPrefix(val, "'") && strings.HasSuffix(val, "'")) ||
+                (strings.HasPrefix(val, "\"") && strings.HasSuffix(val, "\"")) {
+                val = val[1 : len(val)-1]
+            }
+
+            // NULL
+            if strings.ToUpper(val) == "NULL" {
+                values[idx] = nil
+                continue
+            }
+
+            parsed, err := storage.ParseValue(val, table.Schema.Columns[idx].ColType)
+            if err != nil {
+                return "", fmt.Errorf("колонка '%s': %w", colName, err)
+            }
+            values[idx] = parsed
+        }
+
+        row := &storage.Row{Values: values}
+        rid, err := table.InsertRow(row)
+        if err != nil {
+            return "", fmt.Errorf("ошибка вставки: %w", err)
+        }
+        return fmt.Sprintf("✓ Вставлено. RID: %s", rid), nil
+    }
+
+    // Старая логика — все колонки подряд
+    if len(stmt.Values) != len(table.Schema.Columns) {
+        return "", fmt.Errorf("ожидается %d значений, получено %d",
+            len(table.Schema.Columns), len(stmt.Values))
+    }
+
+    values := make([]interface{}, len(stmt.Values))
+    for i, expr := range stmt.Values {
+        lit, ok := expr.(*parser.Literal)
+        if !ok {
+            return "", fmt.Errorf("ожидается литерал")
+        }
+
+        val := lit.Value
+        if (strings.HasPrefix(val, "'") && strings.HasSuffix(val, "'")) ||
+            (strings.HasPrefix(val, "\"") && strings.HasSuffix(val, "\"")) {
+            val = val[1 : len(val)-1]
+        }
+
+        if strings.ToUpper(val) == "NULL" {
+            values[i] = nil
+            continue
+        }
+
+        parsed, err := storage.ParseValue(val, table.Schema.Columns[i].ColType)
+        if err != nil {
+            return "", fmt.Errorf("колонка '%s': %w", table.Schema.Columns[i].Name, err)
+        }
+        values[i] = parsed
+    }
+
+    row := &storage.Row{Values: values}
+    rid, err := table.InsertRow(row)
+    if err != nil {
+        return "", fmt.Errorf("ошибка вставки: %w", err)
+    }
+    return fmt.Sprintf("✓ Вставлено. RID: %s", rid), nil
+}
+
+func (e *Executor) getNextID(tableName, colName string) int {
+    // Сначала пробуем получить текущее значение
+    result, err := e.Execute(fmt.Sprintf(
+        "SELECT next_val FROM _sequences WHERE table_name = '%s' AND col_name = '%s'",
+        tableName, colName,
+    ))
+    
+    fmt.Printf("[DEBUG] getNextID: result='%s', err=%v\n", result, err)
+    
+    // Если записи нет — создаём
+    if err != nil || result == "" || strings.Contains(result, "Строк: 0") {
+        e.Execute(fmt.Sprintf(
+            "INSERT INTO _sequences (table_name, col_name, next_val) VALUES ('%s', '%s', 2)",
+            tableName, colName,
+        ))
+        fmt.Printf("[DEBUG] getNextID: created new sequence, returning 1\n")
+        return 1
+    }
+    
+    var current int
+	lines := strings.Split(result, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		// Пропускаем строки с текстом
+		if strings.Contains(line, "Строк:") || strings.Contains(line, "Таблица:") || 
+		strings.Contains(line, "┌") || strings.Contains(line, "├") || 
+		strings.Contains(line, "└") || strings.Contains(line, "│") == false {
 			continue
 		}
-
-		parsed, err := storage.ParseValue(lit.Value, colType)
-		if err != nil {
-			return "", fmt.Errorf("колонка '%s': %w", table.Schema.Columns[i].Name, err)
-		}
-		values[i] = parsed
-	}
-
-	row := &storage.Row{Values: values}
-
-	// Проверяем constraints ДО вставки
-	if err := e.validateInsert(table, row); err != nil {
-		return "", err // ← ВАЖНО: возвращаем ошибку, не вставляем
-	}
-
-	rid, err := table.InsertRow(row)
-	if err != nil {
-		return "", fmt.Errorf("ошибка вставки: %w", err)
-	}
-
-	// Обновляем индексы
-	for idxName, btree := range e.Indexes {
-		parts := strings.SplitN(idxName, ".", 2)
-		if parts[0] == stmt.Table {
-			colName := parts[1]
-			colIdx := findColumnIndex(table.Schema, colName)
-			if colIdx >= 0 {
-				if key, ok := values[colIdx].(int32); ok {
-					btree.Insert(int64(key), []byte(rid.String()))
-				}
-			}
+		// Очищаем от │ и пробелов
+		line = strings.Trim(line, "│ ")
+		if n, err := strconv.Atoi(line); err == nil {
+			current = n
+			break  // ← берём первое число
 		}
 	}
-
-	return fmt.Sprintf("✓ Вставлено. RID: %s", rid), nil
+    
+    if current == 0 {
+        current = 1
+    }
+    
+    next := current + 1
+    fmt.Printf("[DEBUG] getNextID: current=%d, next=%d\n", current, next)
+    
+    // Обновляем
+    updateResult, updateErr := e.Execute(fmt.Sprintf(
+        "UPDATE _sequences SET next_val = %d WHERE table_name = '%s' AND col_name = '%s'",
+        next, tableName, colName,
+    ))
+    fmt.Printf("[DEBUG] getNextID: update result='%s', err=%v\n", updateResult, updateErr)
+    
+    return next
 }
 
 // executeSelect — SELECT (с использованием индекса)

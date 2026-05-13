@@ -3,56 +3,173 @@
 
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AgentDB</title>
-    <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="style.css">
+    <script src="utils.js"></script>
+    <script src="graph.js"></script>
+    <script src="sql.js"></script>
+    <script src="agent.js"></script>
+    <script src="context.js"></script>
+    <script src="app.js"></script>
 </head>
 
 <body>
-    <div class="container">
-        <aside class="sidebar">
+    <div class="app">
+        <!-- Левая панель -->
+        <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <h2>🗄️ AgentDB</h2>
+                <span class="logo">⬡ AgentDB</span>
+                <button class="btn-icon" onclick="toggleSidebar()" title="Свернуть">◀</button>
             </div>
-            <div class="sidebar-section">
-                <h3>📊 Таблицы</h3>
-                <div id="tables-list"></div>
+
+            <!-- Навигация -->
+            <nav class="nav">
+                <button class="nav-btn active" data-view="graph">📊 Граф</button>
+                <button class="nav-btn" data-view="sql">💾 SQL</button>
+                <button class="nav-btn" data-view="agent">🤖 Агент</button>
+            </nav>
+
+            <!-- Поиск -->
+            <div class="search-box">
+                <input type="text" id="global-search" placeholder="Поиск по графу...">
             </div>
-            <div class="sidebar-section">
-                <h3>🔍 Анализ кода</h3>
-                <input type="text" id="repo-path" placeholder="Путь к репозиторию" value=".">
-                <button id="btn-parse">Анализировать</button>
-                <div id="parse-status"></div>
+
+            <!-- Схема БД -->
+            <div class="panel-section">
+                <div class="panel-title">📊 Схема БД</div>
+                <div id="tables-list" class="list"></div>
             </div>
-            <div class="sidebar-section" id="node-details-section" style="display:none;">
-                <h3>📌 Node Details</h3>
-                <div id="node-details"></div>
+
+            <!-- Файлы проекта -->
+            <div class="panel-section">
+                <div class="panel-title">📂 Файлы</div>
+                <div id="files-list" class="list"></div>
             </div>
         </aside>
+
+        <!-- Основная область -->
         <main class="main">
-            <div class="tabs">
-                <button class="tab active" data-tab="sql">SQL</button>
-                <button class="tab" data-tab="graph">Граф кода</button>
-            </div>
-
-            <div class="tab-content active" id="tab-sql">
-                <textarea id="sql-input" placeholder="SELECT * FROM ..." rows="4"></textarea>
-                <button id="btn-execute">▶ Выполнить</button>
-                <pre id="result-output"></pre>
-            </div>
-
-            <div class="tab-content" id="tab-graph">
-                <div class="graph-controls">
-                    <button class="filter-btn active" data-filter="all">All</button>
-                    <button class="filter-btn" data-filter="file">Files</button>
-                    <button class="filter-btn" data-filter="class">Classes</button>
-                    <button class="filter-btn" data-filter="function">Functions</button>
-                    <button class="filter-btn" data-filter="call">Calls</button>
-                    <input type="text" id="search-input" placeholder="Search...">
+            <!-- View: Graph -->
+            <div id="view-graph" class="view active">
+                <div class="view-toolbar">
+                    <div class="filter-tags">
+                        <span class="tag active" data-filter="all">Все</span>
+                        <span class="tag" data-filter="class">Классы</span>
+                        <span class="tag" data-filter="function">Функции</span>
+                        <span class="tag" data-filter="call">Вызовы</span>
+                    </div>
+                    <div class="graph-actions">
+                        <input type="text" id="repo-path" placeholder="Путь к репозиторию" value="."
+                            style="width:200px;padding:6px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;">
+                        <button class="btn-sm btn-primary" onclick="parseRepo()">🔍 Анализировать</button>
+                        <span id="parse-status" style="font-size:11px;color:var(--muted)"></span>
+                        <button class="btn-sm" onclick="fitGraph()">По размеру</button>
+                        <button class="btn-sm" onclick="resetGraph()">Сбросить</button>
+                    </div>
                 </div>
-                <canvas id="graph-canvas" width="900" height="600"></canvas>
+                <div class="graph-container">
+                    <canvas id="graph-canvas"></canvas>
+                </div>
+            </div>
+
+            <!-- View: SQL -->
+            <div id="view-sql" class="view">
+                <div class="sql-editor">
+                    <textarea id="sql-input" placeholder="SELECT * FROM ..." rows="6"></textarea>
+                    <div class="sql-actions">
+                        <button class="btn-primary" onclick="executeSQL()">▶ Выполнить</button>
+                        <span class="shortcut">Ctrl+Enter</span>
+                    </div>
+                </div>
+                <div id="sql-result" class="sql-result"></div>
+            </div>
+
+            <!-- View: Agent -->
+            <div id="view-agent" class="view">
+                <div class="agent-chat" id="agent-chat">
+                    <div class="chat-placeholder">
+                        <div class="logo-large">⬡</div>
+                        <p>AgentDB Assistant</p>
+                        <p class="muted">Задайте вопрос агенту</p>
+                    </div>
+                </div>
+                <div class="agent-input">
+                    <textarea id="agent-message" placeholder="Сообщение..." rows="2"></textarea>
+                    <button class="btn-primary" onclick="sendAgentMessage()">▶</button>
+                </div>
             </div>
         </main>
+
+        <!-- Правая панель -->
+        <aside class="context-panel" id="context-panel">
+            <div class="panel-header">
+                <span>Контекст</span>
+                <button class="btn-icon" onclick="toggleContextPanel()">▶</button>
+            </div>
+
+            <!-- Статус -->
+            <div class="status-bar">
+                <span class="status-dot" id="status-dot"></span>
+                <span id="status-text">Не подключено</span>
+            </div>
+
+            <!-- Metaspace -->
+            <div class="context-section">
+                <div class="section-header">
+                    <span>🧠 Metaspace</span>
+                    <span class="badge" id="meta-count">0</span>
+                </div>
+                <div id="metaspace-list" class="context-list"></div>
+            </div>
+
+            <!-- Инструкции -->
+            <div class="context-section">
+                <div class="section-header">
+                    <span>📋 Инструкции</span>
+                    <span class="badge" id="instr-count">0</span>
+                </div>
+                <div id="instructions-list" class="context-list"></div>
+            </div>
+
+            <!-- Буфер -->
+            <div class="context-section">
+                <div class="section-header">
+                    <span>📦 Буфер</span>
+                    <span class="badge" id="buffer-count">0</span>
+                </div>
+                <div id="buffer-list" class="context-list"></div>
+            </div>
+
+            <!-- Инструменты -->
+            <div class="context-section">
+                <div class="section-header">🔧 Инструменты</div>
+                <div class="tools-grid" id="tools-list"></div>
+            </div>
+
+            <!-- Настройки -->
+            <div class="context-section">
+                <div class="section-header">⚙️ Настройки</div>
+                <div class="settings-form">
+                    <label>Модель</label>
+                    <input type="text" id="agent-model" value="openai/gpt-oss-120b:free">
+                    <label>Base URL</label>
+                    <input type="text" id="agent-url" value="https://openrouter.ai/api/v1">
+                    <label>API Key</label>
+                    <input type="password" id="agent-key" value="YOUR_API_KEY_HERE">
+                    <label>Session</label>
+                    <input type="text" id="agent-session" value="1">
+                </div>
+            </div>
+
+            <!-- Управление -->
+            <div class="context-section">
+                <button class="btn-sm btn-warn" onclick="rollback()">↩ Откат на шаг</button>
+                <button class="btn-sm" onclick="runGC()">🗑 Minor GC</button>
+            </div>
+        </aside>
     </div>
+
     <script src="app.js"></script>
 </body>
 

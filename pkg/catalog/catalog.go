@@ -61,3 +61,8 @@ func (c *Catalog) Save() error {
 	}
 	return os.WriteFile(c.filePath, data, 0644)
 }
+
+func (c *Catalog) RemoveTable(name string) {
+    delete(c.Schemas, name)
+    c.Save()
+}

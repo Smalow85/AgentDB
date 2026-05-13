@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
-	"time"
-    "os"
 	"strings"
+	"time"
+	"os"
 
+	"agent-db/pkg/agent"
 	"agent-db/pkg/executor"
 	"agent-db/pkg/graph"
 	"agent-db/pkg/psi"
@@ -68,6 +69,7 @@ func (s *Server) Start(addr string) error {
 	http.HandleFunc("/api/context/current", s.handleContextCurrent)
 	http.HandleFunc("/api/context/rollback", s.handleContextRollback)
 	http.HandleFunc("/api/context/gc", s.handleContextGC)
+    http.HandleFunc("/api/agent/loop", s.handleAgentLoop)
 
 	staticFS, _ := fs.Sub(staticFiles, "static")
 	http.Handle("/", http.FileServer(http.FS(staticFS)))
@@ -421,42 +423,102 @@ func (s *Server) handlePSIContext(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAgentLoop(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		SessionID string `json:"session_id"`
-		Message   string `json:"message"`
-		LLMKey    string `json:"llm_key"`
-		Model     string `json:"model"`
-		BaseURL   string `json:"base_url"`
-	}
+    var req struct {
+        SessionID int    `json:"session_id"`
+        Message   string `json:"message"`
+        LLMKey    string `json:"llm_key"`
+        Model     string `json:"model"`
+        BaseURL   string `json:"base_url"`
+    }
 
-	if req.BaseURL == "" {
-    	writeJSON(w, map[string]string{"error": "не указан base_url"})
-    	return
-	}
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        writeJSON(w, map[string]string{"error": "неверный JSON"})
+        return
+    }
 
-	if req.Model == "" {
-    	writeJSON(w, map[string]string{"error": "не указан model"})
-    	return
-	}
+    if req.BaseURL == "" || req.LLMKey == "" {
+        writeJSON(w, map[string]string{"error": "нужен base_url и llm_key"})
+        return
+    }
+    if req.SessionID == 0 {
+        req.SessionID = 1
+    }
 
-	json.NewDecoder(r.Body).Decode(&req)
+    // 1. Сохраняем инструкцию пользователя
+    s.saveInstruction(req.SessionID, req.Message)
 
+    // 2. Собираем контекст для отладки
+    contextSummary := s.buildContextSummary(req.SessionID)
+    fmt.Printf("\n┌─────────────── КОНТЕКСТ ДО LLM ───────────────┐\n")
+    fmt.Printf("│ Session: %d\n", req.SessionID)
+    fmt.Printf("│ Metaspace: %s\n", truncate(contextSummary["metaspace"], 100))
+    fmt.Printf("│ Instructions: %s\n", truncate(contextSummary["instructions"], 100))
+    fmt.Printf("│ Previous thoughts: %s\n", truncate(contextSummary["thoughts"], 100))
+    fmt.Printf("│ Buffer: %s\n", truncate(contextSummary["buffer"], 100))
+    fmt.Printf("└──────────────────────────────────────────────┘\n\n")
 
-	a := &agent.AgentLoop{
-		SessionID: req.SessionID,
-		PSIGraph:  s.PSIGraph,
-		LLMKey:    req.LLMKey,
-		Model:     req.Model,
-		BaseURL:   req.BaseURL,
-	}
+    // 3. Запускаем агента
+    a := &agent.AgentLoop{
+        SessionID: fmt.Sprintf("%d", req.SessionID),
+        PSIGraph:  s.PSIGraph,
+        LLMKey:    req.LLMKey,
+        Model:     req.Model,
+        BaseURL:   req.BaseURL,
+    }
 
-	result, err := a.Run(req.Message)
-	if err != nil {
-		writeJSON(w, map[string]string{"error": err.Error()})
-		return
-	}
+    fmt.Printf("[AGENT] Отправка в LLM: model=%s message=%s\n", req.Model, truncate(req.Message, 80))
 
-	writeJSON(w, map[string]string{"result": result})
+    result, messages, err := a.Run(req.Message)
+
+    // 4. Сохраняем всю историю
+    fmt.Printf("[AGENT] Ответ получен, сохраняем историю (%d сообщений)\n", len(messages))
+    
+    for _, msg := range messages {
+        switch msg.Role {
+        case "tool":
+            parts := strings.SplitN(msg.Content, ": ", 2)
+            toolName := parts[0]
+            toolResult := ""
+            if len(parts) > 1 {
+                toolResult = parts[1]
+            }
+            s.saveToolCall(req.SessionID, toolName, toolResult)
+            fmt.Printf("[AGENT]   ↳ tool: %s\n", toolName)
+            
+        case "assistant":
+            s.saveReasoning(req.SessionID, "assistant_response", msg.Content)
+            fmt.Printf("[AGENT]   ↳ assistant: %s\n", truncate(msg.Content, 80))
+        }
+    }
+
+    if err != nil {
+        fmt.Printf("[AGENT] ❌ Ошибка: %v\n", err)
+        writeJSON(w, map[string]string{"error": err.Error()})
+        return
+    }
+
+    fmt.Printf("[AGENT] ✅ Успех: %s\n", truncate(result, 80))
+    writeJSON(w, map[string]string{"result": result})
+}
+
+func (s *Server) saveToReasoning(sessionID, thoughtType, content string) {
+    // Обрежем слишком длинный контент
+    if len(content) > 500 {
+        content = content[:500]
+    }
+    
+    sql := fmt.Sprintf(
+        "INSERT INTO reasoning_space (session_id, epoch, thought_type, content) VALUES ('%s', 1, '%s', '%s')",
+        sessionID, thoughtType, escapeSQL(content),
+    )
+    fmt.Printf("[DEBUG] SQL: %s\n", sql)
+    
+    result, err := s.Exec.Execute(sql)
+    if err != nil {
+        fmt.Printf("[ERROR] saveToReasoning: %v\n", err)
+    } else {
+        fmt.Printf("[DEBUG] Saved: %s\n", result)
+    }
 }
 
 func (s *Server) handleMetaspaceLoad(w http.ResponseWriter, r *http.Request) {
@@ -483,7 +545,7 @@ func (s *Server) handleMetaspaceAdd(w http.ResponseWriter, r *http.Request) {
     json.NewDecoder(r.Body).Decode(&req)
 
     result, err := s.Exec.Execute(fmt.Sprintf(
-        "INSERT INTO metaspace (agent_id, version, content_type, content, priority) VALUES ('%s', 1, '%s', '%s', %d)",
+        "INSERT INTO metaspace VALUES ('%s', 1, '%s', '%s', %d)",
         req.AgentID, req.ContentType, escapeSQL(req.Content), req.Priority,
     ))
     if err != nil {
@@ -667,56 +729,14 @@ func (s *Server) handleContextRollback(w http.ResponseWriter, r *http.Request) {
     writeJSON(w, map[string]string{"status": "ok"})
 }
 
-// POST /api/context/gc — запуск GC
-func (s *Server) handleContextGC(w http.ResponseWriter, r *http.Request) {
-    var req struct {
-        SessionID string `json:"session_id"`
-        GCType    string `json:"gc_type"` // "minor", "major", "full"
-    }
-    json.NewDecoder(r.Body).Decode(&req)
-
-    switch req.GCType {
-    case "minor":
-        // Очистка буфера по TTL
-        s.Exec.Execute(fmt.Sprintf(
-            "DELETE FROM buffer_space WHERE session_id = '%s' AND created_at < %d - ttl",
-            req.SessionID, time.Now().Unix()))
-        // Очистка тулов
-        s.Exec.Execute(fmt.Sprintf(
-            "DELETE FROM session_tools WHERE session_id = '%s' AND expires_at < %d",
-            req.SessionID, time.Now().Unix()))
-
-    case "major":
-        // Сжатие старых мыслей
-        s.Exec.Execute(fmt.Sprintf(
-            "UPDATE reasoning_space SET content = '[compressed] ' || substr(content, 1, 100) WHERE session_id = '%s' AND epoch < (SELECT MAX(epoch) - 50 FROM reasoning_space WHERE session_id = '%s')",
-            req.SessionID, req.SessionID))
-        // Удаление буфера
-        s.Exec.Execute(fmt.Sprintf(
-            "DELETE FROM buffer_space WHERE session_id = '%s' AND rolled_back = 1",
-            req.SessionID))
-
-    case "full":
-        // Удаление откаченных записей
-        s.Exec.Execute(fmt.Sprintf("DELETE FROM buffer_space WHERE session_id = '%s' AND rolled_back = 1", req.SessionID))
-        s.Exec.Execute(fmt.Sprintf("DELETE FROM reasoning_space WHERE session_id = '%s' AND rolled_back = 1", req.SessionID))
-        s.Exec.Execute(fmt.Sprintf("DELETE FROM tool_calls WHERE session_id = '%s' AND rolled_back = 1", req.SessionID))
-        s.Exec.Execute(fmt.Sprintf("DELETE FROM inference_space WHERE session_id = '%s' AND rolled_back = 1", req.SessionID))
-    }
-
-    writeJSON(w, map[string]string{"status": "ok"})
+func escapeSQL(s string) string {
+    return strings.ReplaceAll(strings.ReplaceAll(s, "'", "''"), "\n", " ")
 }
-
-func writeJSON(w http.ResponseWriter, data interface{}) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	json.NewEncoder(w).Encode(data)
-}
-
 
 func (s *Server) initContextManager() {
     tables := []string{
         `CREATE TABLE IF NOT EXISTS metaspace (
-            id INT PRIMARY KEY,
+            id INT PRIMARY KEY AUTOINCREMENT,
             agent_id TEXT NOT NULL,
             version INT NOT NULL,
             content_type TEXT NOT NULL,
@@ -725,7 +745,7 @@ func (s *Server) initContextManager() {
             is_active INT DEFAULT 1
         )`,
         `CREATE TABLE IF NOT EXISTS instruction_stack (
-            id INT PRIMARY KEY,
+            id INT PRIMARY KEY AUTOINCREMENT,
             session_id INT NOT NULL,
             epoch INT NOT NULL,
             rolled_back INT DEFAULT 0,
@@ -734,7 +754,7 @@ func (s *Server) initContextManager() {
             content TEXT NOT NULL
         )`,
         `CREATE TABLE IF NOT EXISTS reasoning_space (
-            id INT PRIMARY KEY,
+            id INT PRIMARY KEY AUTOINCREMENT,
             session_id INT NOT NULL,
             epoch INT NOT NULL,
             rolled_back INT DEFAULT 0,
@@ -744,7 +764,7 @@ func (s *Server) initContextManager() {
             content TEXT NOT NULL
         )`,
         `CREATE TABLE IF NOT EXISTS tool_registry (
-            id INT PRIMARY KEY,
+            id INT PRIMARY KEY AUTOINCREMENT,
             agent_id TEXT NOT NULL,
             name TEXT NOT NULL,
             description TEXT,
@@ -752,14 +772,14 @@ func (s *Server) initContextManager() {
             default_ttl INT DEFAULT 300
         )`,
         `CREATE TABLE IF NOT EXISTS session_tools (
-            id INT PRIMARY KEY,
+            id INT PRIMARY KEY AUTOINCREMENT,
             session_id INT NOT NULL,
             tool_id INT,
             loaded_at INT NOT NULL,
             expires_at INT
         )`,
         `CREATE TABLE IF NOT EXISTS tool_calls (
-            id INT PRIMARY KEY,
+            id INT PRIMARY KEY AUTOINCREMENT,
             session_id INT NOT NULL,
             epoch INT NOT NULL,
             rolled_back INT DEFAULT 0,
@@ -769,7 +789,7 @@ func (s *Server) initContextManager() {
             status TEXT DEFAULT 'pending'
         )`,
         `CREATE TABLE IF NOT EXISTS buffer_space (
-            id INT PRIMARY KEY,
+            id INT PRIMARY KEY AUTOINCREMENT,
             session_id INT NOT NULL,
             epoch INT NOT NULL,
             rolled_back INT DEFAULT 0,
@@ -780,7 +800,7 @@ func (s *Server) initContextManager() {
             created_at INT NOT NULL
         )`,
         `CREATE TABLE IF NOT EXISTS inference_space (
-            id INT PRIMARY KEY,
+            id INT PRIMARY KEY AUTOINCREMENT,
             session_id INT NOT NULL,
             epoch INT NOT NULL,
             rolled_back INT DEFAULT 0,
@@ -789,14 +809,131 @@ func (s *Server) initContextManager() {
             inference_type TEXT DEFAULT 'assumption'
         )`,
         `CREATE TABLE IF NOT EXISTS inference_evidence (
-            id INT PRIMARY KEY,
+            id INT PRIMARY KEY AUTOINCREMENT,
             inference_id INT,
             buffer_id INT,
             thought_id INT
+        )`,
+        `CREATE TABLE IF NOT EXISTS _sequences (
+            table_name TEXT PRIMARY KEY,
+            col_name TEXT, 
+            next_val INT
         )`,
     }
     for _, t := range tables {
         s.Exec.Execute(t)
     }
     fmt.Println("✓ Контекст-менеджер инициализирован")
+}
+
+func (s *Server) handleContextGC(w http.ResponseWriter, r *http.Request) {
+    var req struct {
+        SessionID string `json:"session_id"`
+        GCType    string `json:"gc_type"`
+    }
+    json.NewDecoder(r.Body).Decode(&req)
+
+    switch req.GCType {
+    case "minor":
+        s.Exec.Execute(fmt.Sprintf(
+            "DELETE FROM buffer_space WHERE session_id = '%s' AND created_at < %d - ttl",
+            req.SessionID, time.Now().Unix()))
+        s.Exec.Execute(fmt.Sprintf(
+            "DELETE FROM session_tools WHERE session_id = '%s' AND expires_at < %d",
+            req.SessionID, time.Now().Unix()))
+    case "major":
+        s.Exec.Execute(fmt.Sprintf(
+            "UPDATE reasoning_space SET content = '[compressed] ' || substr(content, 1, 100) WHERE session_id = '%s' AND epoch < (SELECT MAX(epoch) - 50 FROM reasoning_space WHERE session_id = '%s')",
+            req.SessionID, req.SessionID))
+        s.Exec.Execute(fmt.Sprintf(
+            "DELETE FROM buffer_space WHERE session_id = '%s' AND rolled_back = 1",
+            req.SessionID))
+    case "full":
+        s.Exec.Execute(fmt.Sprintf("DELETE FROM buffer_space WHERE session_id = '%s' AND rolled_back = 1", req.SessionID))
+        s.Exec.Execute(fmt.Sprintf("DELETE FROM reasoning_space WHERE session_id = '%s' AND rolled_back = 1", req.SessionID))
+        s.Exec.Execute(fmt.Sprintf("DELETE FROM tool_calls WHERE session_id = '%s' AND rolled_back = 1", req.SessionID))
+        s.Exec.Execute(fmt.Sprintf("DELETE FROM inference_space WHERE session_id = '%s' AND rolled_back = 1", req.SessionID))
+    }
+
+    writeJSON(w, map[string]string{"status": "ok"})
+}
+
+func writeJSON(w http.ResponseWriter, data interface{}) {
+    w.Header().Set("Content-Type", "application/json; charset=utf-8")
+    json.NewEncoder(w).Encode(data)
+}
+
+func (s *Server) buildContextSummary(sessionID int) map[string]string {
+    sid := fmt.Sprintf("%d", sessionID)
+    result := make(map[string]string)
+
+    // Metaspace
+    metaspace, _ := s.Exec.Execute("SELECT content FROM metaspace WHERE is_active = 1 ORDER BY priority DESC LIMIT 3")
+    result["metaspace"] = metaspace
+
+    // Инструкции
+    instructions, _ := s.Exec.Execute(fmt.Sprintf(
+        "SELECT content FROM instruction_stack WHERE session_id = '%s' AND rolled_back = 0 ORDER BY depth LIMIT 5", sid))
+    result["instructions"] = instructions
+
+    // Мысли
+    thoughts, _ := s.Exec.Execute(fmt.Sprintf(
+        "SELECT thought_type || ': ' || content FROM reasoning_space WHERE session_id = '%s' AND rolled_back = 0 ORDER BY epoch LIMIT 5", sid))
+    result["thoughts"] = thoughts
+
+    // Буфер
+    buffer, _ := s.Exec.Execute(fmt.Sprintf(
+        "SELECT key || ': ' || data FROM buffer_space WHERE session_id = '%s' AND rolled_back = 0 LIMIT 5", sid))
+    result["buffer"] = buffer
+
+    return result
+}
+
+func (s *Server) saveInstruction(sessionID int, content string) {
+    if len(content) > 500 {
+        content = content[:500]
+    }
+    s.Exec.Execute(fmt.Sprintf(
+        "INSERT INTO instruction_stack (session_id, epoch, rolled_back, parent_id, depth, content) VALUES ('%d', 1, 0, 0, 0, '%s')",
+        sessionID, escapeSQL(content),
+    ))
+}
+
+func (s *Server) saveToolCall(sessionID int, toolName, toolResult string) {
+    if len(toolName) > 100 {
+        toolName = toolName[:100]
+    }
+    if len(toolResult) > 500 {
+        toolResult = toolResult[:500]
+    }
+
+    // Сохраняем вызов
+    s.Exec.Execute(fmt.Sprintf(
+        "INSERT INTO tool_calls (session_id, epoch, rolled_back, thought_id, tool_id, args, status) VALUES ('%d', 1, 0, 0, 0, '', 'success')",
+        sessionID,
+    ))
+
+    // Сохраняем результат в буфер
+    now := time.Now().Unix()
+    s.Exec.Execute(fmt.Sprintf(
+        "INSERT INTO buffer_space (session_id, epoch, rolled_back, tool_call_id, key, data, ttl, created_at) VALUES ('%d', 1, 0, 0, '%s', '%s', 300, %d)",
+        sessionID, toolName, escapeSQL(toolResult), now,
+    ))
+}
+
+func (s *Server) saveReasoning(sessionID int, thoughtType, content string) {
+    if len(content) > 500 {
+        content = content[:500]
+    }
+    s.Exec.Execute(fmt.Sprintf(
+        "INSERT INTO reasoning_space (session_id, epoch, rolled_back, parent_instruction_id, parent_thought_id, thought_type, content) VALUES ('%d', 1, 0, 0, 0, '%s', '%s')",
+        sessionID, thoughtType, escapeSQL(content),
+    ))
+}
+
+func truncate(s string, maxLen int) string {
+    if len(s) <= maxLen {
+        return s
+    }
+    return s[:maxLen] + "..."
 }

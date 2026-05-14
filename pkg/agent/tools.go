@@ -56,6 +56,13 @@ func (e *ToolExecutor) Execute(call ToolCall) string {
 		return e.addToBuffer(call.Args["key"], call.Args["data"], call.Args["ttl"])
 	case "add_inference":
 		return e.addInference(call.Args["conclusion"], call.Args["confidence"], call.Args["type"])
+	// Инструменты кодогенерации
+	case "generate_code":
+		return e.generateCode(call.Args["target"], call.Args["description"], call.Args["context"])
+	case "validate_syntax":
+		return e.validateSyntax(call.Args["path"])
+	case "search_context":
+		return e.searchContext(call.Args["query"], call.Args["language"])
 	default:
 		return fmt.Sprintf("Неизвестный инструмент: %s", call.Name)
 	}
@@ -312,7 +319,114 @@ func (e *ToolExecutor) addInference(conclusion, confidence, inferenceType string
 	return fmt.Sprintf("✓ Вывод добавлен: %s (уверенность: %.2f)", truncateString(conclusion, 50), conf)
 }
 
-// Вспомогательные функции
+// ========== Инструменты кодогенерации ==========
+
+func (e *ToolExecutor) generateCode(target, description, context string) string {
+	if e.ContextManager == nil {
+		return "❌ ContextManager не инициализирован"
+	}
+	
+	if target == "" || description == "" {
+		return "❌ Необходимо указать target файл и description"
+	}
+	
+	// Сохраняем запрос на генерацию в буфер
+	err := e.ContextManager.AddToBuffer("generate_request", fmt.Sprintf("%s -> %s", target, description), 600)
+	if err != nil {
+		return fmt.Sprintf("❌ Ошибка сохранения запроса: %v", err)
+	}
+	
+	// Если указан контекст, сохраняем его тоже
+	if context != "" {
+		e.ContextManager.AddToBuffer("generate_context", context, 600)
+	}
+	
+	// Добавляем мысль о начале генерации
+	e.ContextManager.AddThought("planning", fmt.Sprintf("Генерация кода для %s: %s", target, description), 0)
+	
+	return fmt.Sprintf("✓ Запрос на генерацию сохранён в буфер. Цель: %s, Описание: %s", target, truncateString(description, 100))
+}
+
+func (e *ToolExecutor) validateSyntax(path string) string {
+	if path == "" {
+		return "❌ Необходимо указать путь к файлу"
+	}
+	
+	// Читаем файл
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Sprintf("❌ Ошибка чтения файла: %v", err)
+	}
+	
+	// Для Go используем gofmt для проверки синтаксиса
+	if strings.HasSuffix(path, ".go") {
+		cmd := exec.Command("gofmt", "-l", path)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Sprintf("❌ Ошибка выполнения gofmt: %v\\n%s", err, string(output))
+		}
+		if len(output) > 0 {
+			return fmt.Sprintf("⚠️ Файл имеет проблемы форматирования:\\n%s", string(output))
+		}
+		return fmt.Sprintf("✓ Синтаксис Go файла %s корректен (%d байт)", path, len(content))
+	}
+	
+	// Для других языков - базовая проверка существования
+	return fmt.Sprintf("✓ Файл %s существует (%d байт). Полная проверка синтаксиса не реализована для этого языка", path, len(content))
+}
+
+func (e *ToolExecutor) searchContext(query, language string) string {
+	if e.PSIGraph == nil {
+		return "❌ PSI граф не инициализирован"
+	}
+	
+	if query == "" {
+		return "❌ Необходимо указать поисковый запрос"
+	}
+	
+	// Поиск узлов по имени или свойству
+	var nodes []*graph.Node
+	if language != "" {
+		// Поиск с учётом языка
+		nodes = e.PSIGraph.FindNodes(graph.Query{
+			Label:    "function",
+			Property: "language",
+			Value:    language,
+		})
+	} else {
+		// Общий поиск по всем функциям
+		nodes = e.PSIGraph.FindNodes(graph.Query{
+			Label: "function",
+		})
+	}
+	
+	// Фильтруем результаты по запросу
+	var results []string
+	for _, node := range nodes {
+		name, _ := node.GetProp("name")
+		nameStr := fmt.Sprintf("%v", name)
+		if strings.Contains(strings.ToLower(nameStr), strings.ToLower(query)) {
+			results = append(results, nameStr)
+		}
+	}
+	
+	if len(results) == 0 {
+		return fmt.Sprintf("Ничего не найдено по запросу '%s'", query)
+	}
+	
+	// Сохраняем результаты в буфер
+	contextData := strings.Join(results, ", ")
+	e.ContextManager.AddToBuffer("search_results", contextData, 300)
+	
+	return fmt.Sprintf("Найдено %d совпадений по запросу '%s': %s", len(results), query, strings.Join(results[:min(len(results), 10)], ", "))
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 
 func truncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {

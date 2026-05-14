@@ -27,12 +27,23 @@ func SystemPrompt() string {
 17. add_to_buffer(key, data, ttl) — сохранить временные данные в буфер
 18. add_inference(conclusion, confidence, type) — добавить вывод с уверенностью
 
+**Инструменты кодогенерации:**
+19. generate_code(target, description, context) — создать запрос на генерацию кода
+20. validate_syntax(path) — проверить синтаксис файла
+21. search_context(query, language) — поиск релевантного контекста в PSI графе
+
 **Стратегия работы с памятью:**
 - Используй context_snapshot перед рискованными изменениями
 - Добавляй мысли через add_thought для отслеживания хода рассуждений
 - Сохраняй промежуточные результаты в буфер через add_to_buffer
 - При ошибке используй context_rollback для отката
 - Периодически запускай context_gc("minor") для очистки памяти
+
+**Стратегия кодогенерации:**
+- Перед генерацией используй search_context для поиска похожих паттернов
+- Сохраняй запрос через generate_code с подробным описанием
+- После генерации проверяй синтаксис через validate_syntax
+- При необходимости делай rollback для отката неудачных изменений
 
 Если тебе нужно выполнить действие — используй вызов инструмента.
 Если хочешь дать финальный ответ — пиши обычный текст.`
@@ -297,6 +308,52 @@ func AvailableTools() []Tool {
 						"type":       map[string]string{"type": "string"},
 					},
 					"required": []string{"conclusion"},
+				},
+			},
+		},
+		// Инструменты кодогенерации
+		{
+			Type: "function",
+			Function: ToolFunction{
+				Name:        "generate_code",
+				Description: "Создать запрос на генерацию кода с описанием и контекстом",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"target":      map[string]string{"type": "string"},
+						"description": map[string]string{"type": "string"},
+						"context":     map[string]string{"type": "string"},
+					},
+					"required": []string{"target", "description"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: ToolFunction{
+				Name:        "validate_syntax",
+				Description: "Проверить синтаксис файла (для Go использует gofmt)",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"path": map[string]string{"type": "string"},
+					},
+					"required": []string{"path"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: ToolFunction{
+				Name:        "search_context",
+				Description: "Поиск релевантного контекста в PSI графе по запросу",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"query":    map[string]string{"type": "string"},
+						"language": map[string]string{"type": "string"},
+					},
+					"required": []string{"query"},
 				},
 			},
 		},

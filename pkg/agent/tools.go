@@ -8,10 +8,13 @@ import (
 	"strings"
 
 	"agent-db/pkg/graph"
+	"agent-db/pkg/executor"
 )
 
 type ToolExecutor struct {
-	PSIGraph *graph.Graph
+	PSIGraph       *graph.Graph
+	ContextManager *ContextManager
+	Executor       *executor.Executor
 }
 
 func (e *ToolExecutor) Execute(call ToolCall) string {
@@ -38,6 +41,21 @@ func (e *ToolExecutor) Execute(call ToolCall) string {
 		return e.psiFindPath(call.Args["from"], call.Args["to"])
 	case "search_code":
 		return e.searchCode(call.Args["pattern"])
+	// Инструменты управления контекстом
+	case "context_snapshot":
+		return e.contextSnapshot()
+	case "context_restore":
+		return e.contextRestore(call.Args["epoch"])
+	case "context_rollback":
+		return e.contextRollback(call.Args["steps"])
+	case "context_gc":
+		return e.contextGC(call.Args["type"])
+	case "add_thought":
+		return e.addThought(call.Args["type"], call.Args["content"])
+	case "add_to_buffer":
+		return e.addToBuffer(call.Args["key"], call.Args["data"], call.Args["ttl"])
+	case "add_inference":
+		return e.addInference(call.Args["conclusion"], call.Args["confidence"], call.Args["type"])
 	default:
 		return fmt.Sprintf("Неизвестный инструмент: %s", call.Name)
 	}
@@ -163,4 +181,142 @@ func (e *ToolExecutor) psiFindPath(from, to string) string {
 		result.WriteString(fmt.Sprintf("  %d: %s\n", i+1, strings.Join(path, " → ")))
 	}
 	return result.String()
+}
+
+// ========== Инструменты управления контекстом ==========
+
+func (e *ToolExecutor) contextSnapshot() string {
+	if e.ContextManager == nil {
+		return "❌ ContextManager не инициализирован"
+	}
+	
+	snapshot, err := e.ContextManager.CreateSnapshot()
+	if err != nil {
+		return fmt.Sprintf("❌ Ошибка создания снимка: %v", err)
+	}
+	
+	return fmt.Sprintf("✓ Снимок создан: epoch=%d, time=%s", snapshot.Epoch, snapshot.Timestamp.Format("15:04:05"))
+}
+
+func (e *ToolExecutor) contextRestore(epochStr string) string {
+	if e.ContextManager == nil {
+		return "❌ ContextManager не инициализирован"
+	}
+	
+	// Парсим эпоху из строки
+	var epoch int
+	fmt.Sscanf(epochStr, "%d", &epoch)
+	
+	snapshot := &ContextSnapshot{
+		SessionID: e.ContextManager.GetSessionID(),
+		Epoch:     epoch,
+	}
+	
+	err := e.ContextManager.Restore(snapshot)
+	if err != nil {
+		return fmt.Sprintf("❌ Ошибка восстановления: %v", err)
+	}
+	
+	return fmt.Sprintf("✓ Контекст восстановлен до эпохи %d", epoch)
+}
+
+func (e *ToolExecutor) contextRollback(stepsStr string) string {
+	if e.ContextManager == nil {
+		return "❌ ContextManager не инициализирован"
+	}
+	
+	var steps int
+	fmt.Sscanf(stepsStr, "%d", &steps)
+	if steps <= 0 {
+		steps = 1
+	}
+	
+	err := e.ContextManager.Rollback(steps)
+	if err != nil {
+		return fmt.Sprintf("❌ Ошибка отката: %v", err)
+	}
+	
+	return fmt.Sprintf("✓ Откат на %d шагов выполнен. Текущая эпоха: %d", steps, e.ContextManager.GetEpoch())
+}
+
+func (e *ToolExecutor) contextGC(gcType string) string {
+	if e.ContextManager == nil {
+		return "❌ ContextManager не инициализирован"
+	}
+	
+	if gcType == "" {
+		gcType = "minor"
+	}
+	
+	err := e.ContextManager.GC(gcType)
+	if err != nil {
+		return fmt.Sprintf("❌ Ошибка GC: %v", err)
+	}
+	
+	return fmt.Sprintf("✓ GC типа '%s' выполнен", gcType)
+}
+
+func (e *ToolExecutor) addThought(thoughtType, content string) string {
+	if e.ContextManager == nil {
+		return "❌ ContextManager не инициализирован"
+	}
+	
+	if thoughtType == "" {
+		thoughtType = "observation"
+	}
+	
+	epoch, err := e.ContextManager.AddThought(thoughtType, content, 0)
+	if err != nil {
+		return fmt.Sprintf("❌ Ошибка добавления мысли: %v", err)
+	}
+	
+	return fmt.Sprintf("✓ Мысль добавлена в эпоху %d: [%s] %s", epoch, thoughtType, truncateString(content, 50))
+}
+
+func (e *ToolExecutor) addToBuffer(key, data, ttlStr string) string {
+	if e.ContextManager == nil {
+		return "❌ ContextManager не инициализирован"
+	}
+	
+	if key == "" {
+		return "❌ Ключ буфера не указан"
+	}
+	
+	var ttl int
+	fmt.Sscanf(ttlStr, "%d", &ttl)
+	
+	err := e.ContextManager.AddToBuffer(key, data, ttl)
+	if err != nil {
+		return fmt.Sprintf("❌ Ошибка записи в буфер: %v", err)
+	}
+	
+	return fmt.Sprintf("✓ Данные записаны в буфер: %s (%d байт)", key, len(data))
+}
+
+func (e *ToolExecutor) addInference(conclusion, confidence, inferenceType string) string {
+	if e.ContextManager == nil {
+		return "❌ ContextManager не инициализирован"
+	}
+	
+	var conf float64
+	fmt.Sscanf(confidence, "%f", &conf)
+	if conf == 0 {
+		conf = 0.5
+	}
+	
+	err := e.ContextManager.AddInference(conclusion, conf, inferenceType)
+	if err != nil {
+		return fmt.Sprintf("❌ Ошибка добавления вывода: %v", err)
+	}
+	
+	return fmt.Sprintf("✓ Вывод добавлен: %s (уверенность: %.2f)", truncateString(conclusion, 50), conf)
+}
+
+// Вспомогательные функции
+
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

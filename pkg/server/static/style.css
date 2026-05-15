@@ -533,3 +533,268 @@ body {
 .settings-form input:focus {
     border-color: var(--accent);
 }
+
+.agent-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+}
+
+.agent-title {
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.agent-status {
+    font-size: 11px;
+    padding: 2px 8px;
+    background: var(--bg);
+    border-radius: 12px;
+    color: var(--success);
+}
+
+.agent-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* Streaming Styles */
+.msg.streaming {
+    background: var(--panel);
+    border-left: 3px solid var(--accent);
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        border-left-color: var(--accent);
+    }
+
+    50% {
+        border-left-color: var(--accent-hover);
+    }
+}
+
+.streaming-content {
+    white-space: pre-wrap;
+    line-height: 1.6;
+}
+
+.streaming-tools {
+    margin-top: 12px;
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+}
+
+.tool-status {
+    padding: 6px 10px;
+    margin: 4px 0;
+    background: var(--bg);
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--warn);
+}
+
+.tool-status.pending::before {
+    content: '⚙️ ';
+    animation: spin 1s linear infinite;
+    display: inline-block;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.tool-status.completed {
+    color: var(--success);
+}
+
+.tool-status.completed::before {
+    content: '✅ ';
+    animation: none;
+}
+
+.tool-result {
+    padding: 8px 10px;
+    margin: 4px 0 8px 0;
+    background: #0a0e13;
+    border-radius: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-all;
+    border-left: 2px solid var(--accent);
+}
+
+/* Example Questions */
+.example-questions {
+    display: flex;
+    gap: 8px;
+    margin-top: 20px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.example-btn {
+    padding: 6px 12px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 11px;
+    transition: all 0.2s;
+}
+
+.example-btn:hover {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+}
+
+/* Agent Input Buttons */
+.agent-input-buttons {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.btn-stop {
+    padding: 8px 16px;
+    background: var(--error);
+    border: none;
+    border-radius: 6px;
+    color: white;
+    cursor: pointer;
+    font-size: 13px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.btn-stop:hover {
+    opacity: 0.9;
+}
+
+/* Tooltips */
+[data-tooltip] {
+    position: relative;
+    cursor: help;
+}
+
+[data-tooltip]:before {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 4px 8px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 11px;
+    white-space: nowrap;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    display: none;
+    z-index: 1000;
+}
+
+[data-tooltip]:hover:before {
+    display: block;
+}
+
+/* Improved scrollbars */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--bg);
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--muted);
+}
+
+/* Loading states */
+.loading {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+
+    .sidebar,
+    .context-panel {
+        width: 200px;
+    }
+
+    .msg {
+        max-width: 95%;
+    }
+
+    .example-questions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+}
+
+/* Добавить в style.css */
+
+.project-select,
+.model-select {
+    width: 100%;
+    padding: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-size: 12px;
+    margin-bottom: 8px;
+}
+
+.settings-input {
+    width: 100%;
+    padding: 6px 8px;
+    margin: 4px 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-size: 11px;
+}
+
+.settings-input:focus {
+    border-color: var(--accent);
+    outline: none;
+}
+
+.current-project {
+    padding: 6px;
+    background: var(--bg);
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: 10px;
+    word-break: break-all;
+}

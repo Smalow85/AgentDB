@@ -9,22 +9,28 @@ import (
 	"strings"
 	"time"
 	"os"
+    "strconv"
+    "log"
 
 	"agent-db/pkg/agent"
 	"agent-db/pkg/executor"
 	"agent-db/pkg/graph"
 	"agent-db/pkg/psi"
 	"agent-db/pkg/storage"
+    "agent-db/pkg/context"
+    "agent-db/pkg/config"
 )
 
 //go:embed static
 var staticFiles embed.FS
 
 type Server struct {
-	Exec     *executor.Executor
-	PSIGraph *graph.Graph
-	PSIDisk  *storage.DiskManager
-	parser   *psi.PSIParser
+    Exec     *executor.Executor
+    PSIGraph *graph.Graph
+    PSIDisk  *storage.DiskManager
+    parser   *psi.PSIParser
+    ctxMgr   *contextmgr.ContextManager
+    config   *config.ConfigManager
 }
 
 func NewServer(exec *executor.Executor) *Server {
@@ -45,6 +51,8 @@ func NewServer(exec *executor.Executor) *Server {
         PSIGraph: g,
         PSIDisk:  psiDisk,
         parser:   psi.NewPSIParser(g),
+        ctxMgr:   contextmgr.NewContextManager(exec),
+        config:   config.NewConfigManager(exec),
     }
     s.initContextManager()
     return s
@@ -70,6 +78,14 @@ func (s *Server) Start(addr string) error {
 	http.HandleFunc("/api/context/rollback", s.handleContextRollback)
 	http.HandleFunc("/api/context/gc", s.handleContextGC)
     http.HandleFunc("/api/agent/loop", s.handleAgentLoop)
+    http.HandleFunc("/api/agent/stream", s.handleAgentLoopStream)
+    http.HandleFunc("/api/config/models", s.handleModels)
+    http.HandleFunc("/api/config/models/add", s.handleAddModel)
+    http.HandleFunc("/api/config/models/active", s.handleSetActiveModel)
+    http.HandleFunc("/api/config/projects", s.handleProjects)
+    http.HandleFunc("/api/config/projects/add", s.handleAddProject)
+    http.HandleFunc("/api/config/projects/active", s.handleSetActiveProject)
+    http.HandleFunc("/api/config/settings", s.handleSettings)
 
 	staticFS, _ := fs.Sub(staticFiles, "static")
 	http.Handle("/", http.FileServer(http.FS(staticFS)))
@@ -444,60 +460,40 @@ func (s *Server) handleAgentLoop(w http.ResponseWriter, r *http.Request) {
         req.SessionID = 1
     }
 
-    // 1. Сохраняем инструкцию пользователя
-    s.saveInstruction(req.SessionID, req.Message)
+    // Сохраняем инструкцию пользователя через контекст-менеджер
+    s.ctxMgr.PushInstruction(req.SessionID, req.Message, 0)
+    s.ctxMgr.AddThought(req.SessionID, "user_input", req.Message, 0)
 
-    // 2. Собираем контекст для отладки
-    contextSummary := s.buildContextSummary(req.SessionID)
-    fmt.Printf("\n┌─────────────── КОНТЕКСТ ДО LLM ───────────────┐\n")
-    fmt.Printf("│ Session: %d\n", req.SessionID)
-    fmt.Printf("│ Metaspace: %s\n", truncate(contextSummary["metaspace"], 100))
-    fmt.Printf("│ Instructions: %s\n", truncate(contextSummary["instructions"], 100))
-    fmt.Printf("│ Previous thoughts: %s\n", truncate(contextSummary["thoughts"], 100))
-    fmt.Printf("│ Buffer: %s\n", truncate(contextSummary["buffer"], 100))
-    fmt.Printf("└──────────────────────────────────────────────┘\n\n")
-
-    // 3. Запускаем агента
+    // Создаём агента с контекст-менеджером
     a := &agent.AgentLoop{
-        SessionID: fmt.Sprintf("%d", req.SessionID),
-        PSIGraph:  s.PSIGraph,
-        LLMKey:    req.LLMKey,
-        Model:     req.Model,
-        BaseURL:   req.BaseURL,
+        SessionID:  fmt.Sprintf("%d", req.SessionID),
+        PSIGraph:   s.PSIGraph,
+        LLMKey:     req.LLMKey,
+        Model:      req.Model,
+        BaseURL:    req.BaseURL,
     }
 
-    fmt.Printf("[AGENT] Отправка в LLM: model=%s message=%s\n", req.Model, truncate(req.Message, 80))
-
+    // Запускаем агента (без контекст-менеджера внутри, он будет использовать внешний)
     result, messages, err := a.Run(req.Message)
-
-    // 4. Сохраняем всю историю
-    fmt.Printf("[AGENT] Ответ получен, сохраняем историю (%d сообщений)\n", len(messages))
     
+    // Сохраняем результат
     for _, msg := range messages {
-        switch msg.Role {
-        case "tool":
-            parts := strings.SplitN(msg.Content, ": ", 2)
-            toolName := parts[0]
-            toolResult := ""
-            if len(parts) > 1 {
-                toolResult = parts[1]
-            }
-            s.saveToolCall(req.SessionID, toolName, toolResult)
-            fmt.Printf("[AGENT]   ↳ tool: %s\n", toolName)
-            
-        case "assistant":
-            s.saveReasoning(req.SessionID, "assistant_response", msg.Content)
-            fmt.Printf("[AGENT]   ↳ assistant: %s\n", truncate(msg.Content, 80))
+        if msg.Role == "assistant" {
+            s.ctxMgr.AddThought(req.SessionID, "assistant_response", msg.Content, 0)
+        }
+        if msg.Role == "tool" {
+            s.ctxMgr.AddToBuffer(req.SessionID, "tool_result", msg.Content, 300)
         }
     }
 
     if err != nil {
-        fmt.Printf("[AGENT] ❌ Ошибка: %v\n", err)
         writeJSON(w, map[string]string{"error": err.Error()})
         return
     }
 
-    fmt.Printf("[AGENT] ✅ Успех: %s\n", truncate(result, 80))
+    // Делаем вывод на основе ответа
+    s.ctxMgr.AddInference(req.SessionID, result, 0.85, "fact")
+
     writeJSON(w, map[string]string{"result": result})
 }
 
@@ -735,6 +731,11 @@ func escapeSQL(s string) string {
 
 func (s *Server) initContextManager() {
     tables := []string{
+        `CREATE TABLE IF NOT EXISTS sessions (
+            id INT PRIMARY KEY,
+            current_epoch INT DEFAULT 0,
+            created_at INT NOT NULL
+        )`,
         `CREATE TABLE IF NOT EXISTS metaspace (
             id INT PRIMARY KEY AUTOINCREMENT,
             agent_id TEXT NOT NULL,
@@ -899,6 +900,425 @@ func (s *Server) saveInstruction(sessionID int, content string) {
     ))
 }
 
+func (s *Server) handleAgentLoopStream(w http.ResponseWriter, r *http.Request) {
+    log.Println("[DEBUG] === handleAgentLoopStream called ===")
+    log.Printf("[DEBUG] Method: %s", r.Method)
+    log.Printf("[DEBUG] URL: %s", r.URL.String())
+    
+    // Настраиваем SSE
+    w.Header().Set("Content-Type", "text/event-stream")
+    w.Header().Set("Cache-Control", "no-cache")
+    w.Header().Set("Connection", "keep-alive")
+    w.Header().Set("Access-Control-Allow-Origin", "*")
+    
+    flusher, ok := w.(http.Flusher)
+    if !ok {
+        log.Println("[ERROR] Streaming unsupported - no flusher")
+        http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+        return
+    }
+    log.Println("[DEBUG] SSE headers set, flusher OK")
+    
+    // Парсим запрос
+    var req struct {
+        SessionID int    `json:"session_id"`
+        Message   string `json:"message"`
+        LLMKey    string `json:"llm_key"`
+        Model     string `json:"model"`
+        BaseURL   string `json:"base_url"`
+    }
+    
+    // Поддерживаем и GET, и POST
+    if r.Method == "POST" {
+        log.Println("[DEBUG] Parsing POST JSON body")
+        if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+            log.Printf("[ERROR] Failed to parse JSON: %v", err)
+            s.sendSSEEvent(w, flusher, "error", fmt.Sprintf("Неверный JSON: %v", err), "")
+            return
+        }
+        log.Printf("[DEBUG] POST parsed: SessionID=%d, MessageLen=%d, Model=%s, BaseURL=%s, HasLLMKey=%v",
+            req.SessionID, len(req.Message), req.Model, req.BaseURL, req.LLMKey != "")
+    } else {
+        log.Println("[DEBUG] Parsing GET query parameters")
+        req.SessionID = parseIntSafe(r.URL.Query().Get("session_id"))
+        req.Message = r.URL.Query().Get("message")
+        req.LLMKey = r.URL.Query().Get("llm_key")
+        req.Model = r.URL.Query().Get("model")
+        req.BaseURL = r.URL.Query().Get("base_url")
+        log.Printf("[DEBUG] GET parsed: SessionID=%d, MessageLen=%d, Model=%s, BaseURL=%s, HasLLMKey=%v",
+            req.SessionID, len(req.Message), req.Model, req.BaseURL, req.LLMKey != "")
+    }
+    
+    if req.SessionID == 0 {
+        log.Println("[DEBUG] SessionID was 0, setting to 1")
+        req.SessionID = 1
+    }
+    
+    // ПРОВЕРКА: что пришло от клиента
+    log.Println("[DEBUG] === FINAL REQUEST VALUES ===")
+    log.Printf("[DEBUG] SessionID: %d", req.SessionID)
+    log.Printf("[DEBUG] Message: %s", truncate(req.Message, 100))
+    log.Printf("[DEBUG] Model: %s", req.Model)
+    log.Printf("[DEBUG] BaseURL: %s", req.BaseURL)
+    log.Printf("[DEBUG] LLMKey (first 20 chars): %s", truncate(req.LLMKey, 20))
+    
+    if req.BaseURL == "" {
+        log.Println("[ERROR] BaseURL is empty!")
+        s.sendSSEEvent(w, flusher, "error", "base_url is required", "")
+        return
+    }
+    
+    if req.LLMKey == "" {
+        log.Println("[WARN] LLMKey is empty! Some providers may require it")
+        // Не возвращаем ошибку, просто предупреждаем
+        s.sendSSEEvent(w, flusher, "warning", "LLM Key не указан, продолжение может не работать", "")
+    }
+    
+    if req.Model == "" {
+        log.Println("[WARN] Model is empty, using default")
+        req.Model = "gpt-3.5-turbo"
+    }
+    
+    // Проверяем, инициализирован ли контекст-менеджер
+    if s.ctxMgr == nil {
+        log.Println("[ERROR] ContextManager is nil!")
+        s.sendSSEEvent(w, flusher, "error", "Контекст-менеджер не инициализирован", "")
+        return
+    }
+    log.Println("[DEBUG] ContextManager OK")
+    
+    // Проверяем PSIGraph
+    if s.PSIGraph == nil {
+        log.Println("[WARN] PSIGraph is nil, continuing anyway")
+    } else {
+        log.Println("[DEBUG] PSIGraph OK")
+    }
+    
+    log.Println("[DEBUG] Saving instruction for session", req.SessionID)
+    if err := s.ctxMgr.PushInstruction(req.SessionID, req.Message, 0); err != nil {
+        log.Printf("[ERROR] Failed to push instruction: %v", err)
+        s.sendSSEEvent(w, flusher, "error", fmt.Sprintf("Ошибка сохранения инструкции: %v", err), "")
+        return
+    }
+    log.Println("[DEBUG] PushInstruction completed successfully")
+    
+    if err := s.ctxMgr.AddThought(req.SessionID, "user_input", req.Message, 0); err != nil {
+        log.Printf("[WARN] Failed to add thought: %v", err)
+    }
+    log.Println("[DEBUG] AddThought completed successfully")  // ← добавить
+
+    // Создаём агента
+    log.Println("[DEBUG] Creating AgentLoop...")  // ← добавить
+    a := &agent.AgentLoop{
+        SessionID:  fmt.Sprintf("%d", req.SessionID),
+        PSIGraph:   s.PSIGraph,
+        LLMKey:     req.LLMKey,
+        Model:      req.Model,
+        BaseURL:    req.BaseURL,
+        ContextMgr: s.ctxMgr,
+    }
+    log.Printf("[DEBUG] AgentLoop created: SessionID=%s", a.SessionID)  // ← добавить
+
+    // Отправляем стартовое событие
+    log.Println("[DEBUG] Sending start event...")  // ← добавить
+    s.sendSSEEvent(w, flusher, "start", "Начинаю обработку...", "")
+    log.Println("[DEBUG] Start event sent")  // ← добавить
+
+    // Запускаем стриминг
+    log.Println("[DEBUG] Calling a.RunStream...")  // ← добавить
+    err := a.RunStream(req.Message, func(event agent.StreamEvent) {
+        log.Printf("[DEBUG] Stream event received: type=%s, content_len=%d", event.Type, len(event.Content))
+        s.sendSSEEvent(w, flusher, event.Type, event.Content, event.Tool)
+    })
+    log.Println("[DEBUG] a.RunStream returned")  // ← добавить
+
+    if err != nil {
+        log.Printf("[ERROR] RunStream failed: %v", err)
+        s.sendSSEEvent(w, flusher, "error", err.Error(), "")
+    } else {
+        log.Println("[DEBUG] RunStream completed successfully")
+        s.sendSSEEvent(w, flusher, "done", "", "")
+    }
+
+    log.Println("[DEBUG] === handleAgentLoopStream finished ===")
+}
+
+func truncate(s string, maxLen int) string {
+    if len(s) <= maxLen {
+        return s
+    }
+    return s[:maxLen] + "..."
+}
+
+// sendSSEEvent — отправка SSE события
+func (s *Server) sendSSEEvent(w http.ResponseWriter, flusher http.Flusher, eventType, content, tool string) {
+    data := map[string]string{
+        "type":    eventType,
+        "content": content,
+    }
+    if tool != "" {
+        data["tool"] = tool
+    }
+    
+    jsonData, _ := json.Marshal(data)
+    fmt.Fprintf(w, "data: %s\n\n", jsonData)
+    flusher.Flush()
+}
+
+func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+    result, err := s.Exec.Execute(`
+        SELECT id, name, display_name, base_url, api_key, is_default
+        FROM model_configs
+        ORDER BY is_default DESC, name ASC
+    `)
+
+    if err != nil {
+        writeJSON(w, map[string]string{"error": err.Error()})
+        return
+    }
+
+    var models []map[string]interface{}
+
+    if result != "" && !strings.Contains(result, "0 rows") {
+        lines := strings.Split(result, "\n")
+
+        for _, line := range lines {
+            line = strings.TrimSpace(line)
+            if line == "" || strings.HasPrefix(line, "id|") || strings.HasPrefix(line, "---") {
+                continue
+            }
+
+            parts := strings.Split(line, "|")
+            if len(parts) >= 6 {
+                id, _ := strconv.Atoi(strings.TrimSpace(parts[0]))
+                isDefault := strings.TrimSpace(parts[5]) == "1"
+
+                models = append(models, map[string]interface{}{
+                    "id":           id,
+                    "name":         strings.TrimSpace(parts[1]),
+                    "display_name": strings.TrimSpace(parts[2]),
+                    "base_url":     strings.TrimSpace(parts[3]),
+                    "api_key":      strings.TrimSpace(parts[4]),
+                    "is_default":   isDefault,
+                })
+            }
+        }
+    }
+
+    writeJSON(w, map[string]interface{}{"models": models})
+}
+
+func (s *Server) handleAddModel(w http.ResponseWriter, r *http.Request) {
+    var req struct {
+        Name        string `json:"name"`
+        DisplayName string `json:"display_name"`
+        BaseURL     string `json:"base_url"`
+        APIKey      string `json:"api_key"`
+        IsDefault   bool   `json:"is_default"`
+    }
+    
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        log.Printf("[ERROR] Failed to parse add model request: %v", err)
+        writeJSON(w, map[string]string{"error": "неверный JSON"})
+        return
+    }
+    
+    log.Printf("[DEBUG] AddModel request: name=%s, baseURL=%s, isDefault=%v", 
+        req.Name, req.BaseURL, req.IsDefault)
+    
+    if req.Name == "" || req.BaseURL == "" {
+        writeJSON(w, map[string]string{"error": "name и base_url обязательны"})
+        return
+    }
+    
+    // Добавляем модель через config менеджер
+    model, err := s.config.AddModel(req.Name, req.DisplayName, req.BaseURL, req.APIKey, req.IsDefault)
+    if err != nil {
+        log.Printf("[ERROR] AddModel failed: %v", err)
+        writeJSON(w, map[string]string{"error": err.Error()})
+        return
+    }
+    
+    writeJSON(w, map[string]interface{}{"success": true, "model": model})
+}
+
+// POST /api/config/models/active — установить активную модель
+func (s *Server) handleSetActiveModel(w http.ResponseWriter, r *http.Request) {
+    var req struct {
+        ModelID int `json:"model_id"`
+    }
+    
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        writeJSON(w, map[string]string{"error": "неверный JSON"})
+        return
+    }
+    
+    if err := s.config.SetActiveModel(req.ModelID); err != nil {
+        writeJSON(w, map[string]string{"error": err.Error()})
+        return
+    }
+    
+    writeJSON(w, map[string]interface{}{"success": true})
+}
+
+// GET /api/config/projects — список проектов
+// pkg/server/server.go — исправленный handleProjects
+
+// GET /api/config/projects — список проектов
+func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
+    if s.config == nil {
+        writeJSON(w, map[string]string{"error": "config manager not initialized"})
+        return
+    }
+    
+    // Получаем проекты из БД
+    result, err := s.Exec.Execute(`
+        SELECT id, name, root_path, description, is_active 
+        FROM project_configs 
+        ORDER BY id DESC
+    `)
+    
+    if err != nil {
+        writeJSON(w, map[string]string{"error": err.Error()})
+        return
+    }
+    
+    fmt.Printf("[DEBUG] SQL Result: '%s'\n", result) // Отладка
+    
+    var projects []map[string]interface{}
+    
+    // Проверяем, есть ли данные
+    if result != "" && !strings.Contains(result, "0 rows") {
+        // Разбиваем на строки
+        lines := strings.Split(result, "\n")
+        
+        for _, line := range lines {
+            line = strings.TrimSpace(line)
+            if line == "" {
+                continue
+            }
+            
+            // Пропускаем заголовок
+            if strings.HasPrefix(line, "id|") || strings.HasPrefix(line, "---") {
+                continue
+            }
+            
+            // Пропускаем рамки
+            if !strings.HasPrefix(line, "│") {
+                continue
+            }
+            
+            // Убираем рамку
+            line = strings.TrimPrefix(line, "│")
+            line = strings.TrimSuffix(line, "│")
+            line = strings.TrimSpace(line)
+            
+            // Парсим строку
+            parts := strings.Split(line, "|")
+            if len(parts) >= 5 {
+                // Преобразуем id в int
+                id, _ := strconv.Atoi(strings.TrimSpace(parts[0]))
+                isActive := strings.TrimSpace(parts[4]) == "1"
+                
+                project := map[string]interface{}{
+                    "id":          id,
+                    "name":        strings.TrimSpace(parts[1]),
+                    "root_path":   strings.TrimSpace(parts[2]),
+                    "description": strings.TrimSpace(parts[3]),
+                    "is_active":   isActive,
+                }
+                projects = append(projects, project)
+                
+                fmt.Printf("[DEBUG] Parsed project: %+v\n", project)
+            }
+        }
+    }
+    
+    // Всегда возвращаем массив, даже пустой
+    if projects == nil {
+        projects = []map[string]interface{}{}
+    }
+    
+    writeJSON(w, map[string]interface{}{
+        "projects": projects,
+        "count":    len(projects),
+    })
+}
+
+// POST /api/config/projects/add — добавить проект
+func (s *Server) handleAddProject(w http.ResponseWriter, r *http.Request) {
+    var req struct {
+        Name        string `json:"name"`
+        RootPath    string `json:"root_path"`
+        Description string `json:"description"`
+    }
+    
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        writeJSON(w, map[string]string{"error": "неверный JSON"})
+        return
+    }
+    
+    project, err := s.config.AddProject(req.Name, req.RootPath, req.Description)
+    if err != nil {
+        writeJSON(w, map[string]string{"error": err.Error()})
+        return
+    }
+    
+    writeJSON(w, map[string]interface{}{"success": true, "project": project})
+}
+
+// POST /api/config/projects/active — установить активный проект
+func (s *Server) handleSetActiveProject(w http.ResponseWriter, r *http.Request) {
+    var req struct {
+        ProjectID int `json:"project_id"`
+    }
+    
+    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+        writeJSON(w, map[string]string{"error": "неверный JSON"})
+        return
+    }
+    
+    if err := s.config.SetActiveProject(req.ProjectID); err != nil {
+        writeJSON(w, map[string]string{"error": err.Error()})
+        return
+    }
+    
+    writeJSON(w, map[string]interface{}{"success": true})
+}
+
+// GET/POST /api/config/settings — настройки пользователя
+func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+    if r.Method == "GET" {
+        settings, err := s.config.GetSettings()
+        if err != nil {
+            writeJSON(w, map[string]string{"error": err.Error()})
+            return
+        }
+        fmt.Printf("[handleSettings] GetSettings returned: %+v\n", settings)
+        writeJSON(w, map[string]interface{}{"settings": settings})
+        return
+    }
+    
+    if r.Method == "POST" {
+        var req struct {
+            StreamingEnabled *bool `json:"streaming_enabled"`
+            Theme           string `json:"theme"`
+        }
+        
+        if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+            writeJSON(w, map[string]string{"error": "неверный JSON"})
+            return
+        }
+        
+        if req.StreamingEnabled != nil {
+            s.config.SetStreamingEnabled(*req.StreamingEnabled)
+        }
+        
+        writeJSON(w, map[string]interface{}{"success": true})
+        return
+    }
+}
+
 func (s *Server) saveToolCall(sessionID int, toolName, toolResult string) {
     if len(toolName) > 100 {
         toolName = toolName[:100]
@@ -931,9 +1351,9 @@ func (s *Server) saveReasoning(sessionID int, thoughtType, content string) {
     ))
 }
 
-func truncate(s string, maxLen int) string {
-    if len(s) <= maxLen {
-        return s
-    }
-    return s[:maxLen] + "..."
+
+func parseIntSafe(s string) int {
+    var i int
+    fmt.Sscanf(s, "%d", &i)
+    return i
 }

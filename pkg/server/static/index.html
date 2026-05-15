@@ -16,7 +16,7 @@
 
 <body>
     <div class="app">
-        <!-- Левая панель -->
+        <!-- ==================== ЛЕВАЯ ПАНЕЛЬ (SIDEBAR) ==================== -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
                 <span class="logo">⬡ AgentDB</span>
@@ -48,10 +48,46 @@
             </div>
         </aside>
 
-        <!-- Основная область -->
+        <!-- ==================== ОСНОВНАЯ ОБЛАСТЬ (MAIN) ==================== -->
         <main class="main">
+            <!-- View: Agent -->
+            <div id="view-agent" class="view active">
+                <div class="agent-header">
+                    <div class="agent-title">
+                        🤖 Agent Assistant
+                        <span class="agent-status" id="agent-status">Готов</span>
+                    </div>
+                    <div class="agent-actions">
+                        <button class="btn-sm" onclick="loadContext()" title="Обновить контекст">🔄</button>
+                        <button class="btn-sm" onclick="clearChat()" title="Очистить чат">🗑</button>
+                    </div>
+                </div>
+                <div class="agent-chat" id="agent-chat">
+                    <div class="chat-placeholder">
+                        <div class="logo-large">⬡</div>
+                        <p>AgentDB Assistant</p>
+                        <p class="muted">Задайте вопрос агенту — он поможет анализировать код</p>
+                        <div class="example-questions">
+                            <button class="example-btn" onclick="setExample('Покажи все классы в проекте')">📦 Показать
+                                классы</button>
+                            <button class="example-btn" onclick="setExample('Найди все вызовы функции main')">🔍 Найти
+                                вызовы</button>
+                            <button class="example-btn" onclick="setExample('Создай новый файл test.go')">📝 Создать файл</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="agent-input">
+                    <textarea id="agent-message" placeholder="Сообщение... (Enter — отправить, Shift+Enter — новая строка)"
+                        rows="2"></textarea>
+                    <div class="agent-input-buttons">
+                        <button id="agent-stop-btn" class="btn-stop" style="display:none" onclick="stopAgentGeneration()">⏹</button>
+                        <button id="agent-send-btn" class="btn-primary" type="button" onclick="sendAgentMessage()">▶ Отправить</button>
+                    </div>
+                </div>
+            </div>
+
             <!-- View: Graph -->
-            <div id="view-graph" class="view active">
+            <div id="view-graph" class="view">
                 <div class="view-toolbar">
                     <div class="filter-tags">
                         <span class="tag active" data-filter="all">Все</span>
@@ -84,24 +120,9 @@
                 </div>
                 <div id="sql-result" class="sql-result"></div>
             </div>
-
-            <!-- View: Agent -->
-            <div id="view-agent" class="view">
-                <div class="agent-chat" id="agent-chat">
-                    <div class="chat-placeholder">
-                        <div class="logo-large">⬡</div>
-                        <p>AgentDB Assistant</p>
-                        <p class="muted">Задайте вопрос агенту</p>
-                    </div>
-                </div>
-                <div class="agent-input">
-                    <textarea id="agent-message" placeholder="Сообщение..." rows="2"></textarea>
-                    <button class="btn-primary" onclick="sendAgentMessage()">▶</button>
-                </div>
-            </div>
         </main>
 
-        <!-- Правая панель -->
+        <!-- ==================== ПРАВАЯ ПАНЕЛЬ (CONTEXT PANEL) ==================== -->
         <aside class="context-panel" id="context-panel">
             <div class="panel-header">
                 <span>Контекст</span>
@@ -114,7 +135,55 @@
                 <span id="status-text">Не подключено</span>
             </div>
 
-            <!-- Metaspace -->
+            <!-- ===== НОВАЯ СЕКЦИЯ: УПРАВЛЕНИЕ ПРОЕКТАМИ ===== -->
+            <div class="context-section">
+                <div class="section-header">
+                    <span>📁 Проекты</span>
+                    <button class="btn-icon" onclick="document.getElementById('add-project-form').style.display='block'">+</button>
+                </div>
+                
+                <select id="project-select" class="project-select">
+                    <option value="">Выберите проект...</option>
+                </select>
+                
+                <div id="add-project-form" style="display:none; margin-top:8px">
+                    <input type="text" id="new-project-name" placeholder="Название проекта" class="settings-input">
+                    <input type="text" id="new-project-path" placeholder="Путь к проекту" class="settings-input">
+                    <input type="text" id="new-project-desc" placeholder="Описание" class="settings-input">
+                    <button class="btn-sm" onclick="addProject()">➕ Добавить</button>
+                    <button class="btn-sm" onclick="document.getElementById('add-project-form').style.display='none'">✖</button>
+                </div>
+                
+                <div class="current-project" id="current-project-path" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
+            </div>
+
+            <!-- ===== НОВАЯ СЕКЦИЯ: УПРАВЛЕНИЕ МОДЕЛЯМИ ===== -->
+            <div class="context-section">
+                <div class="section-header">
+                    <span>🤖 Модели LLM</span>
+                    <button class="btn-icon" onclick="document.getElementById('add-model-form').style.display='block'">+</button>
+                </div>
+                
+                <select id="agent-model-select" class="model-select">
+                    <option value="">Выберите модель...</option>
+                </select>
+                
+                <div id="current-model-info" class="current-project" style="font-size:11px;color:var(--muted);margin-top:8px"></div>
+                
+                <div id="add-model-form" style="display:none; margin-top:8px">
+                    <input type="text" id="new-model-name" placeholder="Имя модели (gpt-4)" class="settings-input">
+                    <input type="text" id="new-model-display" placeholder="Отображаемое имя" class="settings-input">
+                    <input type="text" id="new-model-url" placeholder="API URL" class="settings-input">
+                    <input type="password" id="new-model-key" placeholder="API Key" class="settings-input">
+                    <label style="font-size:11px">
+                        <input type="checkbox" id="new-model-default"> Сделать моделью по умолчанию
+                    </label>
+                    <button class="btn-sm" onclick="addModel()">➕ Добавить</button>
+                    <button class="btn-sm" onclick="document.getElementById('add-model-form').style.display='none'">✖</button>
+                </div>
+            </div>
+
+            <!-- ===== СУЩЕСТВУЮЩАЯ СЕКЦИЯ: METASPACE ===== -->
             <div class="context-section">
                 <div class="section-header">
                     <span>🧠 Metaspace</span>
@@ -123,7 +192,7 @@
                 <div id="metaspace-list" class="context-list"></div>
             </div>
 
-            <!-- Инструкции -->
+            <!-- ===== СУЩЕСТВУЮЩАЯ СЕКЦИЯ: ИНСТРУКЦИИ ===== -->
             <div class="context-section">
                 <div class="section-header">
                     <span>📋 Инструкции</span>
@@ -132,7 +201,7 @@
                 <div id="instructions-list" class="context-list"></div>
             </div>
 
-            <!-- Буфер -->
+            <!-- ===== СУЩЕСТВУЮЩАЯ СЕКЦИЯ: БУФЕР ===== -->
             <div class="context-section">
                 <div class="section-header">
                     <span>📦 Буфер</span>
@@ -141,24 +210,22 @@
                 <div id="buffer-list" class="context-list"></div>
             </div>
 
-            <!-- Инструменты -->
+            <!-- ===== СУЩЕСТВУЮЩАЯ СЕКЦИЯ: ИНСТРУМЕНТЫ ===== -->
             <div class="context-section">
                 <div class="section-header">🔧 Инструменты</div>
                 <div class="tools-grid" id="tools-list"></div>
             </div>
 
-            <!-- Настройки -->
+            <!-- ===== СУЩЕСТВУЮЩАЯ СЕКЦИЯ: НАСТРОЙКИ (упрощённая) ===== -->
             <div class="context-section">
                 <div class="section-header">⚙️ Настройки</div>
                 <div class="settings-form">
-                    <label>Модель</label>
-                    <input type="text" id="agent-model" value="openai/gpt-oss-120b:free">
-                    <label>Base URL</label>
-                    <input type="text" id="agent-url" value="https://openrouter.ai/api/v1">
-                    <label>API Key</label>
-                    <input type="password" id="agent-key" value="YOUR_API_KEY_HERE">
-                    <label>Session</label>
+                    <label>Session ID</label>
                     <input type="text" id="agent-session" value="1">
+                    <label style="margin-top:8px">
+                        <input type="checkbox" id="streaming-toggle" onchange="toggleStreaming(this.checked)">
+                        Стриминг ответов
+                    </label>
                 </div>
             </div>
 
@@ -169,8 +236,6 @@
             </div>
         </aside>
     </div>
-
-    <script src="app.js"></script>
 </body>
 
 </html>

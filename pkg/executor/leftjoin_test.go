@@ -3,12 +3,14 @@ package executor
 import (
 	"strings"
 	"testing"
+	"os"
 
 	"agent-db/pkg/index"
 	"agent-db/pkg/storage"
 )
 
 func TestExecuteLeftJoin(t *testing.T) {
+	os.Remove("test_leftjoin.db")
 	disk, _ := storage.NewDiskManager("test_leftjoin.db")
 	bp := storage.NewBufferPool(100, disk)
 
@@ -70,6 +72,7 @@ func TestExecuteLeftJoin(t *testing.T) {
 }
 
 func TestExecuteJoinWithWhere(t *testing.T) {
+	os.Remove("test_join_where.db")
 	disk, _ := storage.NewDiskManager("test_join_where.db")
 	bp := storage.NewBufferPool(100, disk)
 
@@ -120,8 +123,8 @@ func TestExecuteJoinWithWhere(t *testing.T) {
 		t.Fatal("JOIN + WHERE вернул пустой результат")
 	}
 
-	// Должна быть только Alice с заказами
-	if !containsString(result, "Bob") {
+	// Должна быть только Alice с заказами (Bob отфильтрован)
+	if containsString(result, "Bob") {
 		t.Error("JOIN + WHERE должен был отфильтровать Bob")
 	}
 }

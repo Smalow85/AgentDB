@@ -33,7 +33,7 @@ func main() {
 
 	tables := exec.ListTables()
 	if len(tables) > 0 {
-		fmt.Printf("✓ Загружено %d таблиц\n", len(tables))
+		fmt.Printf("✓ Загружено %d таблиц: %v\n", len(tables), tables)
 	}
 
 	srv := server.NewServer(exec)

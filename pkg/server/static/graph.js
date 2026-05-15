@@ -171,10 +171,10 @@ function fitGraph() { scale = 0.8; pan = { x: 50, y: 50 }; renderGraph() }
 function resetGraph() { initNodes(); runSimulation(); renderGraph() }
 
 function updateFilesList() {
-    if (!graphData) return
+    if (!graphData || !graphData.nodes) return
     const files = graphData.nodes.filter(n => n.type === 'file')
     const list = document.getElementById('files-list')
-    list.innerHTML = files.map(f => `<div class="list-item">📄 ${f.label}</div>`).join('')
+    if (list) list.innerHTML = files.map(f => `<div class="list-item">📄 ${f.label}</div>`).join('')
 }
 
 // События мыши

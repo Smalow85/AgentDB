@@ -1,15 +1,5 @@
+// pkg/agent/types.go
 package agent
-
-import "agent-db/pkg/graph"
-
-// AgentLoop — основной цикл агента
-type AgentLoop struct {
-    SessionID string
-    PSIGraph  *graph.Graph
-    LLMKey    string
-    Model     string
-    BaseURL   string
-}
 
 // Message — сообщение в диалоге с LLM
 type Message struct {
@@ -28,7 +18,7 @@ type ToolCall struct {
 
 type ToolCallFunction struct {
     Name      string `json:"name"`
-    Arguments string `json:"arguments"` // JSON-строка с параметрами
+    Arguments string `json:"arguments"`
 }
 
 // Tool — описание инструмента для LLM
@@ -48,14 +38,25 @@ type ChatRequest struct {
     Model    string    `json:"model"`
     Messages []Message `json:"messages"`
     Tools    []Tool    `json:"tools,omitempty"`
+    Stream   bool      `json:"stream,omitempty"`
 }
 
-// ChatResponse — ответ от LLM API
+// ChatResponse — ответ от LLM API (не-стриминг)
 type ChatResponse struct {
     Choices []struct {
         Message struct {
             Content   string     `json:"content"`
             ToolCalls []ToolCall `json:"tool_calls"`
         } `json:"message"`
+    } `json:"choices"`
+}
+
+// StreamResponse — ответ от LLM API (стриминг)
+type StreamResponse struct {
+    Choices []struct {
+        Delta struct {
+            Content   string     `json:"content"`
+            ToolCalls []ToolCall `json:"tool_calls"`
+        } `json:"delta"`
     } `json:"choices"`
 }

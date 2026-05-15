@@ -3,7 +3,7 @@ package integration
 import (
 	"fmt"
 	"os"
-	"sqldb/pkg/storage"
+	"agent-db/pkg/storage"
 	"testing"
 )
 

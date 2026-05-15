@@ -1,6 +1,6 @@
 package fixtures
 
-import "sqldb/pkg/storage"
+import "agent-db/pkg/storage"
 
 func UsersSchema() *storage.TableSchema {
 	return &storage.TableSchema{

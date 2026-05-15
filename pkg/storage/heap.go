@@ -42,8 +42,8 @@ func (h *HeapFile) InsertRow(row *Row) (RID, error) {
 			continue
 		}
 		header := p.ReadHeader()
-		// Проверяем, что страница принадлежит этой таблице или пустая
-		if header.TableID == h.TableID() || header.RowCount == 0 {
+		// Проверяем, что страница принадлежит этой таблице или пустая (TableID=0 AND RowCount=0)
+		if header.TableID == h.TableID() || (header.TableID == 0 && header.RowCount == 0) {
 			if p.CanFit(uint16(len(data))) {
 				page = p
 				pageID = pid
@@ -56,7 +56,16 @@ func (h *HeapFile) InsertRow(row *Row) (RID, error) {
 	// Если нет подходящей — создаём новую
 	if page == nil {
 		pageID = h.Disk.AllocatePage()
-		page = NewPage(pageID)
+		// Добавляем страницу в буферный пул, чтобы FlushAll мог её записать
+		var err error
+		page, err = h.BufferPool.FetchPage(pageID)
+		if err != nil {
+			return InvalidRID, fmt.Errorf("ошибка выделения страницы: %w", err)
+		}
+		// Устанавливаем TableID сразу, чтобы страница не была видна другим таблицам как "пустая"
+		header := page.ReadHeader()
+		header.TableID = h.TableID()
+		page.writeHeader(header)
 	}
 
 	// Устанавливаем TableID
@@ -115,6 +124,11 @@ func (h *HeapFile) ScanFull() ([]*Row, error) {
 	}
 
 	return rows, nil
+}
+
+// PageCount returns total number of pages
+func (h *HeapFile) PageCount() uint64 {
+	return h.Disk.pageCount
 }
 
 // TableID возвращает числовой ID таблицы (хеш от имени)

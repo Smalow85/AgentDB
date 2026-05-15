@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"ai-context/internal/db"
+	"agent-db/internal/db"
 )
 
 func HandleSession(w http.ResponseWriter, r *http.Request) {

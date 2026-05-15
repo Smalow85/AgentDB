@@ -475,6 +475,9 @@ func (e *Executor) executeDelete(stmt *parser.DeleteStatement) (string, error) {
 		deleted++
 	}
 
+	// Сбрасываем изменения на диск
+	table.BufferPool.FlushAll()
+
 	return fmt.Sprintf("✓ Удалено %d строк", deleted), nil
 }
 
@@ -525,6 +528,9 @@ func (e *Executor) executeUpdate(stmt *parser.UpdateStatement) (string, error) {
 		}
 		updated++
 	}
+
+	// Сбрасываем изменения на диск
+	table.BufferPool.FlushAll()
 
 	return fmt.Sprintf("✓ Обновлено %d строк", updated), nil
 }

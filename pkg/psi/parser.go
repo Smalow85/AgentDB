@@ -12,9 +12,10 @@ import (
 )
 
 type PSIParser struct {
-	Graph  *graph.Graph
-	fileID int64
-	lang   *gotreesitter.Language
+	Graph           *graph.Graph
+	fileID          int64
+	currentFilePath string // ← ДОБАВИТЬ: текущий файл
+	lang            *gotreesitter.Language
 }
 
 func NewPSIParser(g *graph.Graph) *PSIParser {
@@ -35,7 +36,6 @@ func (p *PSIParser) ParseRepo(repoPath string) error {
 	if err != nil {
 		return err
 	}
-	// После парсинга всех файлов резолвим вызовы
 	p.resolveAllCalls()
 	return nil
 }
@@ -46,8 +46,14 @@ func (p *PSIParser) ParseFile(filePath string, lang *LanguageInfo) error {
 		return fmt.Errorf("ошибка чтения %s: %w", filePath, err)
 	}
 
+	// Нормализуем путь
+	normalizedPath := filepath.ToSlash(filePath)
+	p.currentFilePath = normalizedPath
+
+	// Создаём узел файла с path
 	fileNode, _ := p.Graph.AddNode([]string{"file", lang.Name}, map[string]interface{}{
-		"path": filePath,
+		"path": normalizedPath,
+		"name": filepath.Base(normalizedPath),
 	})
 	p.fileID = fileNode.ID
 
@@ -61,7 +67,6 @@ func (p *PSIParser) ParseFile(filePath string, lang *LanguageInfo) error {
 	root := tree.RootNode()
 	p.walkNode(fileNode.ID, root, string(content), "")
 
-	// Связываем методы с классами
 	p.linkMethodsToClasses()
 	return nil
 }
@@ -78,7 +83,6 @@ func (p *PSIParser) walkNode(parentID int64, node *gotreesitter.Node, source str
 
 	switch t {
 	case "type_declaration":
-		// Пробрасываем детей, класс создаётся из type_spec
 		for i := 0; i < int(node.ChildCount()); i++ {
 			child := node.Child(i)
 			if child != nil {
@@ -89,8 +93,11 @@ func (p *PSIParser) walkNode(parentID int64, node *gotreesitter.Node, source str
 	case "type_spec":
 		name := extractName(node, source, p.lang)
 		if name != "" {
+			// ← ДОБАВЛЯЕМ path и file
 			classNode, _ := p.Graph.AddNode([]string{"class"}, map[string]interface{}{
 				"name": name,
+				"path": p.currentFilePath, // ← СВЯЗЬ С ФАЙЛОМ
+				"file": p.currentFilePath, // ← ДЛЯ НАДЁЖНОСТИ
 			})
 			p.Graph.AddEdge("contains", parentID, classNode.ID)
 			for i := 0; i < int(node.ChildCount()); i++ {
@@ -103,16 +110,19 @@ func (p *PSIParser) walkNode(parentID int64, node *gotreesitter.Node, source str
 
 	case "method_declaration":
 		name := extractName(node, source, p.lang)
-		// Извлекаем класс из ресивера
 		className := extractReceiverClass(node, source, p.lang)
 		if className != "" {
 			contextName = className
 		}
 
 		if name != "" {
+			// ← ДОБАВЛЯЕМ path и file
 			funcNode, _ := p.Graph.AddNode([]string{"function"}, map[string]interface{}{
-				"name":  name,
-				"class": contextName,
+				"name":      name,
+				"class":     contextName,
+				"path":      p.currentFilePath, // ← СВЯЗЬ С ФАЙЛОМ
+				"file":      p.currentFilePath, // ← ДЛЯ НАДЁЖНОСТИ
+				"is_method": true,
 			})
 			p.Graph.AddEdge("contains", parentID, funcNode.ID)
 			for i := 0; i < int(node.ChildCount()); i++ {
@@ -124,11 +134,14 @@ func (p *PSIParser) walkNode(parentID int64, node *gotreesitter.Node, source str
 		}
 
 	case "function_declaration":
-		// Package-level функция (без ресивера)
 		name := extractName(node, source, p.lang)
 		if name != "" {
+			// ← ДОБАВЛЯЕМ path и file
 			funcNode, _ := p.Graph.AddNode([]string{"function"}, map[string]interface{}{
-				"name": name,
+				"name":      name,
+				"path":      p.currentFilePath, // ← СВЯЗЬ С ФАЙЛОМ
+				"file":      p.currentFilePath, // ← ДЛЯ НАДЁЖНОСТИ
+				"is_method": false,
 			})
 			p.Graph.AddEdge("contains", parentID, funcNode.ID)
 			for i := 0; i < int(node.ChildCount()); i++ {
@@ -140,15 +153,16 @@ func (p *PSIParser) walkNode(parentID int64, node *gotreesitter.Node, source str
 		}
 
 	case "call_expression":
-        calledName := extractCallName(node, source, p.lang)
-        if calledName != "" {
-            callNode, _ := p.Graph.AddNode([]string{"call"}, map[string]interface{}{
-                "name":    calledName,
-                "context": contextName,
-            })
-            p.Graph.AddEdge("contains", parentID, callNode.ID)
-            // Без резолвинга
-        }
+		calledName := extractCallName(node, source, p.lang)
+		if calledName != "" {
+			// ← ДОБАВЛЯЕМ path
+			callNode, _ := p.Graph.AddNode([]string{"call"}, map[string]interface{}{
+				"name":    calledName,
+				"context": contextName,
+				"path":    p.currentFilePath, // ← СВЯЗЬ С ФАЙЛОМ
+			})
+			p.Graph.AddEdge("contains", parentID, callNode.ID)
+		}
 
 	default:
 		for i := 0; i < int(node.ChildCount()); i++ {
@@ -160,7 +174,7 @@ func (p *PSIParser) walkNode(parentID int64, node *gotreesitter.Node, source str
 	}
 }
 
-// linkMethodsToClasses связывает методы с классами через рёбра contains
+// linkMethodsToClasses связывает методы с классами
 func (p *PSIParser) linkMethodsToClasses() {
 	functions := p.Graph.FindNodes(graph.Query{Label: "function"})
 	classes := p.Graph.FindNodes(graph.Query{Label: "class"})
@@ -173,7 +187,6 @@ func (p *PSIParser) linkMethodsToClasses() {
 		classStr := strings.TrimLeft(fmt.Sprintf("%v", className), "*&")
 		for _, class := range classes {
 			if name, _ := class.GetProp("name"); fmt.Sprintf("%v", name) == classStr {
-				// Проверяем, не привязана ли уже
 				neighbors := p.Graph.GetNeighbors(class.ID, graph.DirectionOutgoing)
 				found := false
 				for _, n := range neighbors {
@@ -191,6 +204,7 @@ func (p *PSIParser) linkMethodsToClasses() {
 	}
 }
 
+// extractName извлекает имя
 func extractName(node *gotreesitter.Node, source string, lang *gotreesitter.Language) string {
 	for i := 0; i < int(node.ChildCount()); i++ {
 		child := node.Child(i)
@@ -201,7 +215,6 @@ func extractName(node *gotreesitter.Node, source string, lang *gotreesitter.Lang
 				return name
 			}
 		}
-		// Ищем глубже
 		if ct == "type_spec" || ct == "type_identifier" {
 			for j := 0; j < int(child.ChildCount()); j++ {
 				grandchild := child.Child(j)
@@ -218,6 +231,7 @@ func extractName(node *gotreesitter.Node, source string, lang *gotreesitter.Lang
 	return ""
 }
 
+// extractReceiverClass извлекает класс из ресивера метода
 func extractReceiverClass(node *gotreesitter.Node, source string, lang *gotreesitter.Language) string {
 	for i := 0; i < int(node.ChildCount()); i++ {
 		child := node.Child(i)
@@ -243,45 +257,46 @@ func extractReceiverClass(node *gotreesitter.Node, source string, lang *gotreesi
 	return ""
 }
 
+// extractCallName извлекает имя вызываемой функции
 func extractCallName(node *gotreesitter.Node, source string, lang *gotreesitter.Language) string {
-    for i := 0; i < int(node.ChildCount()); i++ {
-        child := node.Child(i)
-        ct := nodeType(child, lang)
-        if ct == "selector_expression" {
-            // a.Analyze() — ищем field_identifier внутри
-            for j := 0; j < int(child.ChildCount()); j++ {
-                sub := child.Child(j)
-                st := nodeType(sub, lang)
-                if st == "field_identifier" {
-                    return content(sub, source)
-                }
-            }
-        }
-        if ct == "identifier" || ct == "field_identifier" {
-            return content(child, source)
-        }
-    }
-    return ""
+	for i := 0; i < int(node.ChildCount()); i++ {
+		child := node.Child(i)
+		ct := nodeType(child, lang)
+		if ct == "selector_expression" {
+			for j := 0; j < int(child.ChildCount()); j++ {
+				sub := child.Child(j)
+				st := nodeType(sub, lang)
+				if st == "field_identifier" {
+					return content(sub, source)
+				}
+			}
+		}
+		if ct == "identifier" || ct == "field_identifier" {
+			return content(child, source)
+		}
+	}
+	return ""
 }
 
+// resolveAllCalls резолвит вызовы
 func (p *PSIParser) resolveAllCalls() {
-    calls := p.Graph.FindNodes(graph.Query{Label: "call"})
-    for _, call := range calls {
-        refs := p.Graph.GetReferences(call.ID, graph.DirectionOutgoing)
-        if len(refs) > 0 {
-            continue
-        }
+	calls := p.Graph.FindNodes(graph.Query{Label: "call"})
+	for _, call := range calls {
+		refs := p.Graph.GetReferences(call.ID, graph.DirectionOutgoing)
+		if len(refs) > 0 {
+			continue
+		}
 
-        contextName, _ := call.GetProp("context")
-
-        if contextName != nil && contextName != "" {
-            p.Graph.ResolveCallWithContext(call.ID, 0, fmt.Sprintf("%v", contextName))
-        } else {
-            p.Graph.ResolveCall(call.ID, 0)
-        }
-    }
+		contextName, _ := call.GetProp("context")
+		if contextName != nil && contextName != "" {
+			p.Graph.ResolveCallWithContext(call.ID, 0, fmt.Sprintf("%v", contextName))
+		} else {
+			p.Graph.ResolveCall(call.ID, 0)
+		}
+	}
 }
 
+// content возвращает текст узла
 func content(node *gotreesitter.Node, source string) string {
 	return source[node.StartByte():node.EndByte()]
 }

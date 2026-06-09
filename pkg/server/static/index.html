@@ -96,13 +96,14 @@
                         <span class="tag" data-filter="call">Вызовы</span>
                     </div>
                     <div class="graph-actions">
-                        <input type="text" id="repo-path" placeholder="Путь к репозиторию" value="."
-                            style="width:200px;padding:6px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:12px;">
+                        <input type="text" id="repo-path" placeholder="Путь к репозиторию" value=".">
                         <button class="btn-sm btn-primary" onclick="parseRepo()">🔍 Анализировать</button>
-                        <span id="parse-status" style="font-size:11px;color:var(--muted)"></span>
+                        <span id="parse-status"></span>
+                        <button id="graph-back-btn" class="btn-sm" style="display:none">← Назад</button>
                         <button class="btn-sm" onclick="fitGraph()">По размеру</button>
                         <button class="btn-sm" onclick="resetGraph()">Сбросить</button>
                     </div>
+                    <div class="graph-stats" id="graph-stats">📁 Загрузка...</div>
                 </div>
                 <div class="graph-container">
                     <canvas id="graph-canvas"></canvas>

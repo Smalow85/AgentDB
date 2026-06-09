@@ -42,18 +42,18 @@ func Lex(input string) ([]Token, error) {
 }
 
 var keywords = map[string]bool{
-    "SELECT": true, "FROM": true, "WHERE": true,
-    "INSERT": true, "INTO": true, "VALUES": true,
-    "CREATE": true, "TABLE": true, "DROP": true,
-    "INDEX": true, "ON": true,
-    "INT": true, "TEXT": true, "FLOAT": true, "BOOL": true,
-    "AND": true, "OR": true, "NOT": true, "NULL": true,
-    "PRIMARY": true, "KEY": true, "UNIQUE": true,
-    "DEFAULT": true, "CHECK": true, "REFERENCES": true,
-    "UPDATE": true, "SET": true, "DELETE": true,
-    "JOIN": true, "INNER": true, "LEFT": true, "RIGHT": true,
+	"SELECT": true, "FROM": true, "WHERE": true,
+	"INSERT": true, "INTO": true, "VALUES": true,
+	"CREATE": true, "TABLE": true, "DROP": true,
+	"INDEX": true, "ON": true,
+	"INT": true, "TEXT": true, "FLOAT": true, "BOOL": true,
+	"AND": true, "OR": true, "NOT": true, "NULL": true,
+	"PRIMARY": true, "KEY": true, "UNIQUE": true,
+	"DEFAULT": true, "CHECK": true, "REFERENCES": true,
+	"UPDATE": true, "SET": true, "DELETE": true,
+	"JOIN": true, "INNER": true, "LEFT": true, "RIGHT": true,
 	"ORDER": true, "BY": true, "ASC": true, "DESC": true,
-    "LIMIT": true, "OFFSET": true,
+	"LIMIT": true, "OFFSET": true,
 	"COUNT": true, "SUM": true, "AVG": true, "MIN": true, "MAX": true,
 	"IF": true, "EXISTS": true, "AUTOINCREMENT": true,
 }
@@ -70,7 +70,6 @@ func (l *Lexer) tokenize() ([]Token, error) {
 			continue
 		}
 
-		// Однострочный комментарий --
 		if ch == '-' && l.pos+1 < len(l.input) && l.input[l.pos+1] == '-' {
 			for l.pos < len(l.input) && l.input[l.pos] != '\n' {
 				l.pos++
@@ -110,18 +109,18 @@ func (l *Lexer) tokenize() ([]Token, error) {
 				((l.input[l.pos] >= 'a' && l.input[l.pos] <= 'z') ||
 					(l.input[l.pos] >= 'A' && l.input[l.pos] <= 'Z') ||
 					(l.input[l.pos] >= '0' && l.input[l.pos] <= '9') ||
-					l.input[l.pos] == '_' || l.input[l.pos] == '.' || l.input[l.pos] == '*') {  // ← добавить '.'
+					l.input[l.pos] == '_' || l.input[l.pos] == '.' || l.input[l.pos] == '*') { // ← добавить '.'
 				l.pos++
 			}
 			word := l.input[start:l.pos]
 			upper := strings.ToUpper(word)
-			
+
 			// TRUE, FALSE, NULL — как литералы
 			if upper == "TRUE" || upper == "FALSE" || upper == "NULL" {
 				tokens = append(tokens, Token{TokenString, word})
 				continue
 			}
-			
+
 			// Ключевые слова (без точек)
 			if !strings.Contains(word, ".") && keywords[upper] {
 				tokens = append(tokens, Token{TokenKeyword, upper})

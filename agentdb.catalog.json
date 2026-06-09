@@ -250,6 +250,181 @@
       }
     ]
   },
+  "model_configs": {
+    "Name": "model_configs",
+    "Columns": [
+      {
+        "Name": "id",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": true,
+        "AutoIncrement": true,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "name",
+        "ColType": 2,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": true,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "display_name",
+        "ColType": 2,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "base_url",
+        "ColType": 2,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "api_key",
+        "ColType": 2,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "is_default",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "0",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "created_at",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "updated_at",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      }
+    ]
+  },
+  "project_configs": {
+    "Name": "project_configs",
+    "Columns": [
+      {
+        "Name": "id",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": true,
+        "AutoIncrement": true,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "name",
+        "ColType": 2,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": true,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "root_path",
+        "ColType": 2,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "description",
+        "ColType": 2,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "is_active",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "0",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "last_used",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "created_at",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      }
+    ]
+  },
   "reasoning_space": {
     "Name": "reasoning_space",
     "Columns": [
@@ -394,6 +569,44 @@
         "Name": "expires_at",
         "ColType": 0,
         "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      }
+    ]
+  },
+  "sessions": {
+    "Name": "sessions",
+    "Columns": [
+      {
+        "Name": "id",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": true,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "current_epoch",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "0",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "created_at",
+        "ColType": 0,
+        "Nullable": false,
         "PrimaryKey": false,
         "AutoIncrement": false,
         "Unique": false,
@@ -562,6 +775,77 @@
         "AutoIncrement": false,
         "Unique": false,
         "Default": "300",
+        "Check": "",
+        "References": ""
+      }
+    ]
+  },
+  "user_settings": {
+    "Name": "user_settings",
+    "Columns": [
+      {
+        "Name": "id",
+        "ColType": 0,
+        "Nullable": false,
+        "PrimaryKey": true,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "1",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "active_model_id",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "active_project_id",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "default_session_id",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "1",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "theme",
+        "ColType": 2,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "dark",
+        "Check": "",
+        "References": ""
+      },
+      {
+        "Name": "streaming_enabled",
+        "ColType": 0,
+        "Nullable": true,
+        "PrimaryKey": false,
+        "AutoIncrement": false,
+        "Unique": false,
+        "Default": "1",
         "Check": "",
         "References": ""
       }

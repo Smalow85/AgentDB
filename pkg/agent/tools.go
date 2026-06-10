@@ -34,6 +34,7 @@ func parseToolCall(call ToolCall) ParsedCall {
 }
 
 func (e *ToolExecutor) Execute(call ToolCall) string {
+	fmt.Printf("[TOOL_EXECUTOR]Toolcall: %s", call)
 	pc := parseToolCall(call)
 	fmt.Printf("[TOOL_EXECUTOR] Executing tool: %s with args: %+v", pc.Name, pc.Args)
 	switch pc.Name {
@@ -69,6 +70,7 @@ func (e *ToolExecutor) readFile(path string) string {
 }
 
 func (e *ToolExecutor) writeFile(path, content string) string {
+	fmt.Printf("[TOOL_WRITE_FILE] Attempting to write to: %s", path)
 	os.MkdirAll(filepath.Dir(path), 0755)
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		return fmt.Sprintf("Ошибка записи: %v", err)

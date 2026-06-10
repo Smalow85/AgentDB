@@ -1,6 +1,9 @@
 package executor
 
 import (
+	"fmt"
+	"os"
+	"strings"
 	"testing"
 
 	"agent-db/pkg/index"
@@ -9,10 +12,13 @@ import (
 )
 
 func TestExecuteJoin(t *testing.T) {
+	os.Remove("test_join.db")
 	disk, _ := storage.NewDiskManager("test_join.db")
+	defer disk.Close()
+
 	bp := storage.NewBufferPool(100, disk)
 
-	// Создаём таблицы напрямую вручную
+	// Создаём таблицы
 	usersSchema := &storage.TableSchema{
 		Name: "users",
 		Columns: []storage.ColumnDef{
@@ -42,53 +48,49 @@ func TestExecuteJoin(t *testing.T) {
 	exec.Tables["orders"] = ordersTable
 
 	// Вставка данных
-	userRow1 := &storage.Row{Values: []interface{}{int32(1), "Alice"}}
-	usersTable.InsertRow(userRow1)
+	usersTable.InsertRow(&storage.Row{Values: []interface{}{int32(1), "Alice"}})
+	usersTable.InsertRow(&storage.Row{Values: []interface{}{int32(2), "Bob"}})
 
-	userRow2 := &storage.Row{Values: []interface{}{int32(2), "Bob"}}
-	usersTable.InsertRow(userRow2)
+	ordersTable.InsertRow(&storage.Row{Values: []interface{}{int32(1), int32(1), float64(100.50)}})
+	ordersTable.InsertRow(&storage.Row{Values: []interface{}{int32(2), int32(1), float64(200.00)}})
+	ordersTable.InsertRow(&storage.Row{Values: []interface{}{int32(3), int32(2), float64(50.00)}})
 
-	orderRow1 := &storage.Row{Values: []interface{}{int32(1), int32(1), float64(100.50)}}
-	ordersTable.InsertRow(orderRow1)
-
-	orderRow2 := &storage.Row{Values: []interface{}{int32(2), int32(1), float64(200.00)}}
-	ordersTable.InsertRow(orderRow2)
-
-	orderRow3 := &storage.Row{Values: []interface{}{int32(3), int32(2), float64(50.00)}}
-	ordersTable.InsertRow(orderRow3)
-
-	// Проверяем что данные есть
-	users, _ := usersTable.ScanFull()
-	t.Logf("Users rows: %d", len(users))
-	for i, r := range users {
-		t.Logf("  user[%d]: %v", i, r.Values)
-	}
-
-	orders, _ := ordersTable.ScanFull()
-	t.Logf("Orders rows: %d", len(orders))
-	for i, r := range orders {
-		t.Logf("  order[%d]: %v", i, r.Values)
-	}
-
-	// JOIN с ORDER BY и LIMIT
-	result, err := exec.Execute("SELECT * FROM users JOIN orders ON users.id = orders.user_id ORDER BY orders.amount DESC LIMIT 3")
-	t.Logf("JOIN result:\n%s", result)
+	// JOIN
+	result, err := exec.Execute("SELECT * FROM users JOIN orders ON users.id = orders.user_id")
 	if err != nil {
 		t.Fatalf("JOIN error: %v", err)
 	}
 
-	if result == "" {
+	if result.Type == "ERROR" {
+		t.Fatalf("JOIN returned error: %s", result.Error)
+	}
+
+	t.Logf("JOIN result: %+v", result)
+	t.Logf("Columns: %v", result.Columns)
+	t.Logf("Rows count: %d", len(result.Rows))
+
+	if len(result.Rows) == 0 {
 		t.Error("JOIN вернул пустой результат")
 	}
 
-	// Проверяем что это JOIN результат
-	if !containsString(result, "JOIN") {
-		t.Error("Результат не содержит JOIN")
+	// Проверяем что есть данные из обеих таблиц
+	foundAlice := false
+	foundBob := false
+	for _, row := range result.Rows {
+		rowStr := strings.Join(toStringSlice(row), " ")
+		if strings.Contains(rowStr, "Alice") {
+			foundAlice = true
+		}
+		if strings.Contains(rowStr, "Bob") {
+			foundBob = true
+		}
 	}
 
-	// Проверяем что есть данные из обеих таблиц
-	if containsString(result, " Charlie") && containsString(result, "NULL") {
-		t.Log("LEFT JOIN работает корректно")
+	if !foundAlice {
+		t.Error("JOIN результат не содержит Alice")
+	}
+	if !foundBob {
+		t.Error("JOIN результат не содержит Bob")
 	}
 }
 
@@ -114,4 +116,16 @@ func TestParseJoinStmt(t *testing.T) {
 	if sel.Join.Condition == nil {
 		t.Error("JOIN condition not parsed")
 	}
+}
+
+func toStringSlice(row []interface{}) []string {
+	result := make([]string, len(row))
+	for i, v := range row {
+		if v == nil {
+			result[i] = "NULL"
+		} else {
+			result[i] = fmt.Sprintf("%v", v)
+		}
+	}
+	return result
 }

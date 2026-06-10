@@ -127,8 +127,10 @@ func (a *AgentLoop) RunStream(
         }
         
         // Сохраняем assistant сообщение с тулколлами
+        // Важно: включаем Content: "" чтобы провайдеры вроде DeepInfra корректно обрабатывали tool_calls
         messages = append(messages, Message{
             Role:      "assistant",
+            Content:   "",
             ToolCalls: currentToolCalls,
         })
         
@@ -272,8 +274,9 @@ func (a *AgentLoop) Run(userMessage string) (string, []Message, error) {
             
             // Сохраняем для ответа API
             allMessages = append(allMessages, Message{
-                Role:    "tool",
-                Content: fmt.Sprintf("%s: %s", toolCall.Function.Name, truncate(toolResult, 200)),
+                Role:       "tool",
+                ToolCallID: toolCall.ID,
+                Content:    fmt.Sprintf("%s: %s", toolCall.Function.Name, truncate(toolResult, 200)),
             })
         }
         

@@ -463,6 +463,73 @@ body {
     border: 1px solid var(--border);
 }
 
+/* SQL Table Styles */
+.sql-table-wrapper {
+    overflow-x: auto;
+    border-radius: var(--radius);
+}
+
+.sql-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 12px;
+}
+
+.sql-table th {
+    text-align: left;
+    padding: 8px 12px;
+    background: var(--bg);
+    color: var(--accent);
+    border-bottom: 2px solid var(--border);
+    font-weight: 600;
+}
+
+.sql-table td {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+}
+
+.sql-table tr:hover td {
+    background: rgba(137, 180, 250, 0.05);
+}
+
+.sql-null {
+    color: var(--muted);
+    font-style: italic;
+}
+
+.sql-success {
+    color: var(--success);
+    padding: 12px;
+    background: rgba(166, 227, 161, 0.1);
+    border-radius: var(--radius);
+    margin-bottom: 8px;
+}
+
+.sql-error {
+    color: var(--error);
+    padding: 12px;
+    background: rgba(243, 139, 168, 0.1);
+    border-radius: var(--radius);
+}
+
+.sql-empty {
+    color: var(--muted);
+    padding: 24px;
+    text-align: center;
+}
+
+.sql-stats {
+    color: var(--text-secondary);
+    font-size: 11px;
+    padding: 8px 12px;
+    background: var(--bg);
+    border-radius: var(--radius);
+    margin-top: 8px;
+}
+
 /* ====== AGENT CHAT ====== */
 .agent-header {
     display: flex;
@@ -503,6 +570,7 @@ body {
     gap: 12px;
 }
 
+/* Custom scrollbar for chat */
 .agent-chat::-webkit-scrollbar {
     width: 6px;
 }
@@ -576,6 +644,7 @@ body {
     border-radius: var(--radius-lg);
     max-width: 85%;
     line-height: 1.5;
+    word-wrap: break-word;
 }
 
 .msg.user {
@@ -923,6 +992,42 @@ body {
     color: var(--text-secondary);
 }
 
+/* Schema Modal */
+.schema-modal {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+    z-index: 1000;
+    min-width: 300px;
+    max-width: 500px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.schema-header {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--accent);
+}
+
+.schema-body {
+    max-height: 300px;
+    overflow-y: auto;
+    margin-bottom: 16px;
+}
+
+.schema-col {
+    padding: 8px;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 12px;
+}
+
 /* ====== SCROLLBARS ====== */
 ::-webkit-scrollbar {
     width: 8px;
@@ -1011,5 +1116,10 @@ body {
         font-size: 10px;
         padding: 6px 10px;
         max-width: 200px;
+    }
+
+    .schema-modal {
+        width: 90%;
+        min-width: auto;
     }
 }

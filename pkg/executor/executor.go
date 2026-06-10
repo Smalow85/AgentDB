@@ -52,11 +52,14 @@ func (e *Executor) ListTables() []string {
 	return e.Catalog.ListTables()
 }
 
-// Execute выполняет SQL-запрос
-func (e *Executor) Execute(query string) (string, error) {
+// Execute выполняет SQL-запрос и возвращает структурированный результат
+func (e *Executor) Execute(query string) (*QueryResult, error) {
 	stmt, err := parser.Parse(query)
 	if err != nil {
-		return "", fmt.Errorf("ошибка парсинга: %w", err)
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: fmt.Sprintf("ошибка парсинга: %v", err),
+		}, nil
 	}
 
 	switch s := stmt.(type) {
@@ -73,97 +76,122 @@ func (e *Executor) Execute(query string) (string, error) {
 	case *parser.UpdateStatement:
 		return e.executeUpdate(s)
 	default:
-		return "", fmt.Errorf("неизвестный тип запроса: %T", s)
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: fmt.Sprintf("неизвестный тип запроса: %T", s),
+		}, nil
 	}
 }
 
 // executeCreate — CREATE TABLE
-func (e *Executor) executeCreate(stmt *parser.CreateTableStatement) (string, error) {
-    columns := make([]storage.ColumnDef, 0, len(stmt.Columns))
-    for _, col := range stmt.Columns {
-        colType := storage.TypeText
-        switch strings.ToUpper(col.Type) {
-        case "INT":
-            colType = storage.TypeInt
-        case "FLOAT":
-            colType = storage.TypeFloat
-        case "TEXT":
-            colType = storage.TypeText
-        case "BOOL":
-            colType = storage.TypeBool
-        default:
-            return "", fmt.Errorf("неизвестный тип: %s", col.Type)
-        }
+func (e *Executor) executeCreate(stmt *parser.CreateTableStatement) (*QueryResult, error) {
+	columns := make([]storage.ColumnDef, 0, len(stmt.Columns))
+	for _, col := range stmt.Columns {
+		colType := storage.TypeText
+		switch strings.ToUpper(col.Type) {
+		case "INT":
+			colType = storage.TypeInt
+		case "FLOAT":
+			colType = storage.TypeFloat
+		case "TEXT":
+			colType = storage.TypeText
+		case "BOOL":
+			colType = storage.TypeBool
+		default:
+			return &QueryResult{
+				Type:  "ERROR",
+				Error: fmt.Sprintf("неизвестный тип: %s", col.Type),
+			}, nil
+		}
 
-        columns = append(columns, storage.ColumnDef{
-            Name:          col.Name,
-            ColType:       colType,
-            Nullable:      !col.NotNull,
-            PrimaryKey:    col.PrimaryKey,
-            AutoIncrement: col.AutoIncrement,
-            Unique:        col.Unique,
-            Default:       col.Default,
-            Check:         col.Check,
-            References:    col.References,
-        })
-    }
-
-    schema := &storage.TableSchema{
-        Name:    stmt.Table,
-        Columns: columns,
-    }
-
-    // Сохраняем через catalog
-    if err := e.Catalog.AddTable(schema); err != nil {
-        return "", fmt.Errorf("ошибка сохранения каталога: %w", err)
-    }
-
-    heap := storage.NewHeapFile(schema, e.BP, e.Disk)
-    e.Tables[stmt.Table] = heap
-
-    // ← ВОТ СЮДА: инициализируем счётчики для автоинкремента
-    for _, col := range columns {
-        if col.AutoIncrement {
-            e.Execute(fmt.Sprintf(
-                "INSERT INTO _sequences (table_name, col_name, next_val) VALUES ('%s', '%s', 1)",
-                stmt.Table, col.Name,
-            ))
-        }
-    }
-
-    return fmt.Sprintf("✓ Таблица '%s' создана (%d колонок)", stmt.Table, len(columns)), nil
-}
-
-// executeCreateIndex — CREATE INDEX idx ON table (column)
-func (e *Executor) executeCreateIndex(stmt *parser.CreateIndexStatement) (string, error) {
-	table, ok := e.Tables[stmt.Table]
-	if !ok {
-		return "", fmt.Errorf("таблица '%s' не найдена", stmt.Table)
+		columns = append(columns, storage.ColumnDef{
+			Name:          col.Name,
+			ColType:       colType,
+			Nullable:      !col.NotNull,
+			PrimaryKey:    col.PrimaryKey,
+			AutoIncrement: col.AutoIncrement,
+			Unique:        col.Unique,
+			Default:       col.Default,
+			Check:         col.Check,
+			References:    col.References,
+		})
 	}
 
-	// Находим колонку
+	schema := &storage.TableSchema{
+		Name:    stmt.Table,
+		Columns: columns,
+	}
+
+	if err := e.Catalog.AddTable(schema); err != nil {
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: fmt.Sprintf("ошибка сохранения каталога: %v", err),
+		}, nil
+	}
+
+	heap := storage.NewHeapFile(schema, e.BP, e.Disk)
+	e.Tables[stmt.Table] = heap
+
+	// Инициализируем счётчики для автоинкремента
+	for _, col := range columns {
+		if col.AutoIncrement {
+			e.Execute(fmt.Sprintf(
+				"INSERT INTO _sequences (table_name, col_name, next_val) VALUES ('%s', '%s', 1)",
+				stmt.Table, col.Name,
+			))
+		}
+	}
+
+	return &QueryResult{
+		Type:         "CREATE",
+		AffectedRows: 1,
+		Columns:      []string{"message"},
+		Rows:         [][]interface{}{{fmt.Sprintf("✓ Таблица '%s' создана (%d колонок)", stmt.Table, len(columns))}},
+	}, nil
+}
+
+// executeCreateIndex — CREATE INDEX
+func (e *Executor) executeCreateIndex(stmt *parser.CreateIndexStatement) (*QueryResult, error) {
+	table, ok := e.Tables[stmt.Table]
+	if !ok {
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: fmt.Sprintf("таблица '%s' не найдена", stmt.Table),
+		}, nil
+	}
+
 	colIdx := findColumnIndex(table.Schema, stmt.Column)
 	if colIdx == -1 {
-		return "", fmt.Errorf("колонка '%s' не найдена в таблице '%s'", stmt.Column, stmt.Table)
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: fmt.Sprintf("колонка '%s' не найдена в таблице '%s'", stmt.Column, stmt.Table),
+		}, nil
 	}
 
 	if table.Schema.Columns[colIdx].ColType != storage.TypeInt {
-		return "", fmt.Errorf("индекс пока поддерживается только для INT колонок")
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: "индекс пока поддерживается только для INT колонок",
+		}, nil
 	}
 
-	// Создаём B+Tree на отдельном DiskManager
 	idxDisk, err := storage.NewDiskManager(fmt.Sprintf("idx_%s_%s.idx", stmt.Table, stmt.Column))
 	if err != nil {
-		return "", fmt.Errorf("ошибка создания файла индекса: %w", err)
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: fmt.Sprintf("ошибка создания файла индекса: %v", err),
+		}, nil
 	}
 
 	adapter := &storage.IndexDiskAdapter{DM: idxDisk}
 	btree := index.NewBTree(adapter)
 
-	// Индексируем существующие данные
 	rows, err := table.ScanFull()
 	if err != nil {
-		return "", err
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: err.Error(),
+		}, nil
 	}
 
 	for _, row := range rows {
@@ -171,216 +199,221 @@ func (e *Executor) executeCreateIndex(stmt *parser.CreateIndexStatement) (string
 		if !ok {
 			continue
 		}
-
-		// Сериализуем RID как значение
-		rid := storage.RID{} // заглушка — нужно сохранять RID при вставке
-		_ = rid
-
 		btree.Insert(int64(key), []byte(fmt.Sprintf("%v", row.Values)))
 	}
 
 	idxName := stmt.Table + "." + stmt.Column
 	e.Indexes[idxName] = btree
 
-	return fmt.Sprintf("✓ Индекс '%s' создан на %s(%s)", stmt.IndexName, stmt.Table, stmt.Column), nil
+	return &QueryResult{
+		Type:         "CREATE_INDEX",
+		AffectedRows: 1,
+		Columns:      []string{"message"},
+		Rows:         [][]interface{}{{fmt.Sprintf("✓ Индекс '%s' создан на %s(%s)", stmt.IndexName, stmt.Table, stmt.Column)}},
+	}, nil
 }
 
-// executeInsert — INSERT INTO (с обновлением индексов)
-func (e *Executor) executeInsert(stmt *parser.InsertStatement) (string, error) {
-    table, ok := e.Tables[stmt.Table]
-    if !ok {
-        return "", fmt.Errorf("таблица '%s' не найдена", stmt.Table)
-    }
+// executeInsert — INSERT INTO
+func (e *Executor) executeInsert(stmt *parser.InsertStatement) (*QueryResult, error) {
+	table, ok := e.Tables[stmt.Table]
+	if !ok {
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: fmt.Sprintf("таблица '%s' не найдена", stmt.Table),
+		}, nil
+	}
 
-    // Если колонки указаны явно
-    if len(stmt.Columns) > 0 {
-        if len(stmt.Columns) != len(stmt.Values) {
-            return "", fmt.Errorf("ожидается %d значений для %d колонок, получено %d",
-                len(stmt.Columns), len(stmt.Columns), len(stmt.Values))
-        }
+	var values []interface{}
+	var lastInsertID int64 = -1
 
-        // Создаём полный массив значений с учётом defaults
-        values := make([]interface{}, len(table.Schema.Columns))
-        for i := range values {
-            values[i] = nil // default NULL
-        }
+	// Если колонки указаны явно
+	if len(stmt.Columns) > 0 {
+		if len(stmt.Columns) != len(stmt.Values) {
+			return &QueryResult{
+				Type:  "ERROR",
+				Error: fmt.Sprintf("ожидается %d значений для %d колонок, получено %d", len(stmt.Columns), len(stmt.Columns), len(stmt.Values)),
+			}, nil
+		}
 
+		values = make([]interface{}, len(table.Schema.Columns))
+		for i := range values {
+			values[i] = nil
+		}
+
+		// Обрабатываем автоинкремент
 		for i, col := range table.Schema.Columns {
-            if col.AutoIncrement {
-                nextID := e.getNextID(stmt.Table, col.Name)
-                values[i] = int32(nextID)
-            }
-        }
+			if col.AutoIncrement {
+				nextID := e.getNextID(stmt.Table, col.Name)
+				values[i] = int32(nextID)
+				lastInsertID = int64(nextID)
+			}
+		}
 
-        for i, colName := range stmt.Columns {
-            idx := findColumnIndex(table.Schema, colName)
-            if idx == -1 {
-                return "", fmt.Errorf("колонка '%s' не найдена в таблице '%s'", colName, stmt.Table)
-            }
+		for i, colName := range stmt.Columns {
+			idx := findColumnIndex(table.Schema, colName)
+			if idx == -1 {
+				return &QueryResult{
+					Type:  "ERROR",
+					Error: fmt.Sprintf("колонка '%s' не найдена в таблице '%s'", colName, stmt.Table),
+				}, nil
+			}
 
-            lit, ok := stmt.Values[i].(*parser.Literal)
-            if !ok {
-                return "", fmt.Errorf("ожидается литерал")
-            }
+			lit, ok := stmt.Values[i].(*parser.Literal)
+			if !ok {
+				return &QueryResult{
+					Type:  "ERROR",
+					Error: "ожидается литерал",
+				}, nil
+			}
 
-            val := lit.Value
-            // Убираем кавычки для строк
-            if (strings.HasPrefix(val, "'") && strings.HasSuffix(val, "'")) ||
-                (strings.HasPrefix(val, "\"") && strings.HasSuffix(val, "\"")) {
-                val = val[1 : len(val)-1]
-            }
+			val := lit.Value
+			if (strings.HasPrefix(val, "'") && strings.HasSuffix(val, "'")) ||
+				(strings.HasPrefix(val, "\"") && strings.HasSuffix(val, "\"")) {
+				val = val[1 : len(val)-1]
+			}
 
-            // NULL
-            if strings.ToUpper(val) == "NULL" {
-                values[idx] = nil
-                continue
-            }
+			if strings.ToUpper(val) == "NULL" {
+				values[idx] = nil
+				continue
+			}
 
-            parsed, err := storage.ParseValue(val, table.Schema.Columns[idx].ColType)
-            if err != nil {
-                return "", fmt.Errorf("колонка '%s': %w", colName, err)
-            }
-            values[idx] = parsed
-        }
+			parsed, err := storage.ParseValue(val, table.Schema.Columns[idx].ColType)
+			if err != nil {
+				return &QueryResult{
+					Type:  "ERROR",
+					Error: fmt.Sprintf("колонка '%s': %v", colName, err),
+				}, nil
+			}
+			values[idx] = parsed
+		}
+	} else {
+		// Все колонки подряд
+		if len(stmt.Values) != len(table.Schema.Columns) {
+			return &QueryResult{
+				Type:  "ERROR",
+				Error: fmt.Sprintf("ожидается %d значений, получено %d", len(table.Schema.Columns), len(stmt.Values)),
+			}, nil
+		}
 
-        row := &storage.Row{Values: values}
-        rid, err := table.InsertRow(row)
-        if err != nil {
-            return "", fmt.Errorf("ошибка вставки: %w", err)
-        }
-        return fmt.Sprintf("✓ Вставлено. RID: %s", rid), nil
-    }
+		values = make([]interface{}, len(stmt.Values))
+		for i, expr := range stmt.Values {
+			lit, ok := expr.(*parser.Literal)
+			if !ok {
+				return &QueryResult{
+					Type:  "ERROR",
+					Error: "ожидается литерал",
+				}, nil
+			}
 
-    // Старая логика — все колонки подряд
-    if len(stmt.Values) != len(table.Schema.Columns) {
-        return "", fmt.Errorf("ожидается %d значений, получено %d",
-            len(table.Schema.Columns), len(stmt.Values))
-    }
+			val := lit.Value
+			if (strings.HasPrefix(val, "'") && strings.HasSuffix(val, "'")) ||
+				(strings.HasPrefix(val, "\"") && strings.HasSuffix(val, "\"")) {
+				val = val[1 : len(val)-1]
+			}
 
-    values := make([]interface{}, len(stmt.Values))
-    for i, expr := range stmt.Values {
-        lit, ok := expr.(*parser.Literal)
-        if !ok {
-            return "", fmt.Errorf("ожидается литерал")
-        }
+			if strings.ToUpper(val) == "NULL" {
+				values[i] = nil
+				continue
+			}
 
-        val := lit.Value
-        if (strings.HasPrefix(val, "'") && strings.HasSuffix(val, "'")) ||
-            (strings.HasPrefix(val, "\"") && strings.HasSuffix(val, "\"")) {
-            val = val[1 : len(val)-1]
-        }
+			parsed, err := storage.ParseValue(val, table.Schema.Columns[i].ColType)
+			if err != nil {
+				return &QueryResult{
+					Type:  "ERROR",
+					Error: fmt.Sprintf("колонка '%s': %v", table.Schema.Columns[i].Name, err),
+				}, nil
+			}
+			values[i] = parsed
+		}
+	}
 
-        if strings.ToUpper(val) == "NULL" {
-            values[i] = nil
-            continue
-        }
+	row := &storage.Row{Values: values}
+	rid, err := table.InsertRow(row)
+	if err != nil {
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: fmt.Sprintf("ошибка вставки: %v", err),
+		}, nil
+	}
 
-        parsed, err := storage.ParseValue(val, table.Schema.Columns[i].ColType)
-        if err != nil {
-            return "", fmt.Errorf("колонка '%s': %w", table.Schema.Columns[i].Name, err)
-        }
-        values[i] = parsed
-    }
+	table.BufferPool.FlushAll()
 
-    row := &storage.Row{Values: values}
-    rid, err := table.InsertRow(row)
-    if err != nil {
-        return "", fmt.Errorf("ошибка вставки: %w", err)
-    }
-    return fmt.Sprintf("✓ Вставлено. RID: %s", rid), nil
+	return &QueryResult{
+		Type:         "INSERT",
+		AffectedRows: 1,
+		LastInsertID: lastInsertID,
+		Columns:      []string{"rid", "message"},
+		Rows:         [][]interface{}{{fmt.Sprintf("%s", rid), "✓ Вставлено"}},
+	}, nil
 }
 
 func (e *Executor) getNextID(tableName, colName string) int {
-    // Сначала пробуем получить текущее значение
-    result, err := e.Execute(fmt.Sprintf(
-        "SELECT next_val FROM _sequences WHERE table_name = '%s' AND col_name = '%s'",
-        tableName, colName,
-    ))
-    
-    fmt.Printf("[DEBUG] getNextID: result='%s', err=%v\n", result, err)
-    
-    // Если записи нет — создаём
-    if err != nil || result == "" || strings.Contains(result, "Строк: 0") {
-        e.Execute(fmt.Sprintf(
-            "INSERT INTO _sequences (table_name, col_name, next_val) VALUES ('%s', '%s', 2)",
-            tableName, colName,
-        ))
-        fmt.Printf("[DEBUG] getNextID: created new sequence, returning 1\n")
-        return 1
-    }
-    
-    var current int
-	lines := strings.Split(result, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		// Пропускаем строки с текстом
-		if strings.Contains(line, "Строк:") || strings.Contains(line, "Таблица:") || 
-		strings.Contains(line, "┌") || strings.Contains(line, "├") || 
-		strings.Contains(line, "└") || strings.Contains(line, "│") == false {
-			continue
-		}
-		// Очищаем от │ и пробелов
-		line = strings.Trim(line, "│ ")
-		if n, err := strconv.Atoi(line); err == nil {
-			current = n
-			break  // ← берём первое число
+	result, err := e.Execute(fmt.Sprintf(
+		"SELECT next_val FROM _sequences WHERE table_name = '%s' AND col_name = '%s'",
+		tableName, colName,
+	))
+
+	if err != nil || result.Type == "ERROR" || len(result.Rows) == 0 {
+		e.Execute(fmt.Sprintf(
+			"INSERT INTO _sequences (table_name, col_name, next_val) VALUES ('%s', '%s', 2)",
+			tableName, colName,
+		))
+		return 1
+	}
+
+	var current int
+	if len(result.Rows) > 0 && len(result.Rows[0]) > 0 {
+		switch v := result.Rows[0][0].(type) {
+		case int:
+			current = v
+		case int64:
+			current = int(v)
+		case float64:
+			current = int(v)
+		default:
+			current = 1
 		}
 	}
-    
-    if current == 0 {
-        current = 1
-    }
-    
-    next := current + 1
-    fmt.Printf("[DEBUG] getNextID: current=%d, next=%d\n", current, next)
-    
-    // Обновляем
-    updateResult, updateErr := e.Execute(fmt.Sprintf(
-        "UPDATE _sequences SET next_val = %d WHERE table_name = '%s' AND col_name = '%s'",
-        next, tableName, colName,
-    ))
-    fmt.Printf("[DEBUG] getNextID: update result='%s', err=%v\n", updateResult, updateErr)
-    
-    return next
+
+	if current == 0 {
+		current = 1
+	}
+
+	next := current + 1
+
+	e.Execute(fmt.Sprintf(
+		"UPDATE _sequences SET next_val = %d WHERE table_name = '%s' AND col_name = '%s'",
+		next, tableName, colName,
+	))
+
+	return next
 }
 
-// executeSelect — SELECT (с использованием индекса)
-func (e *Executor) executeSelect(stmt *parser.SelectStatement) (string, error) {
+// executeSelect — SELECT
+func (e *Executor) executeSelect(stmt *parser.SelectStatement) (*QueryResult, error) {
 	table, ok := e.Tables[stmt.Table]
 	if !ok {
-		return "", fmt.Errorf("таблица '%s' не найдена", stmt.Table)
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: fmt.Sprintf("таблица '%s' не найдена", stmt.Table),
+		}, nil
 	}
 
 	var rows []*storage.Row
+	var err error
 
-	// Если есть JOIN — отдельная логика
+	// Если есть JOIN
 	if stmt.Join != nil {
 		return e.executeJoin(stmt)
 	}
 
-	// Проверяем, можно ли использовать индекс
-	if stmt.Condition != nil && stmt.Condition.Operator == "=" {
-		if colIdent, ok := stmt.Condition.Left.(*parser.Identifier); ok {
-			idxName := stmt.Table + "." + colIdent.Name
-			if btree, hasIdx := e.Indexes[idxName]; hasIdx {
-				if rightLit, ok := stmt.Condition.Right.(*parser.Literal); ok {
-					key, err := strconv.ParseInt(rightLit.Value, 10, 64)
-					if err == nil {
-						// Используем индекс!
-						_, found, _ := btree.Search(key)
-						if found {
-							fmt.Printf("⚡ Использован индекс %s\n", idxName)
-						}
-					}
-				}
-			}
-		}
-	}
-
 	// Полный скан
-	rows, err := table.ScanFull()
+	rows, err = table.ScanFull()
 	if err != nil {
-		return "", fmt.Errorf("ошибка чтения: %w", err)
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: fmt.Sprintf("ошибка чтения: %v", err),
+		}, nil
 	}
 
 	// Фильтрация
@@ -388,23 +421,28 @@ func (e *Executor) executeSelect(stmt *parser.SelectStatement) (string, error) {
 		rows = filterRows(rows, table.Schema, stmt.Condition)
 	}
 
+	// Агрегаты
 	if len(stmt.Aggregates) > 0 {
 		aggResult := computeAggregates(rows, table.Schema, stmt.Aggregates)
-		
-		result := "\n┌──────────────────────────────────┐\n"
+		resultRows := make([][]interface{}, 0, len(aggResult))
+		resultCols := make([]string, 0, len(aggResult))
 		for key, val := range aggResult {
-			result += fmt.Sprintf("│ %-20s %v\n", key, val)
+			resultCols = append(resultCols, key)
+			resultRows = append(resultRows, []interface{}{val})
 		}
-		result += "└──────────────────────────────────┘\n"
-		return result, nil
+		return &QueryResult{
+			Type:    "SELECT",
+			Columns: resultCols,
+			Rows:    resultRows,
+		}, nil
 	}
 
-	// ORDER BY - после фильтрации
+	// ORDER BY
 	if stmt.OrderBy != "" {
 		applyOrderBy(rows, table.Schema, stmt.OrderBy, stmt.OrderDir)
 	}
 
-	// LIMIT / OFFSET - после ORDER BY
+	// LIMIT / OFFSET
 	if stmt.Limit >= 0 || stmt.Offset > 0 {
 		rows = applyLimitOffset(rows, stmt.Limit, stmt.Offset)
 	}
@@ -412,85 +450,99 @@ func (e *Executor) executeSelect(stmt *parser.SelectStatement) (string, error) {
 	// Проекция
 	allColumns := len(stmt.Columns) == 1 && stmt.Columns[0] == "*"
 	var colIndexes []int
+	var colNames []string
+
 	if !allColumns {
 		for _, colName := range stmt.Columns {
 			idx := findColumnIndex(table.Schema, colName)
 			if idx == -1 {
-				return "", fmt.Errorf("колонка '%s' не найдена", colName)
+				return &QueryResult{
+					Type:  "ERROR",
+					Error: fmt.Sprintf("колонка '%s' не найдена", colName),
+				}, nil
 			}
 			colIndexes = append(colIndexes, idx)
+			colNames = append(colNames, colName)
+		}
+	} else {
+		for i, col := range table.Schema.Columns {
+			colIndexes = append(colIndexes, i)
+			colNames = append(colNames, col.Name)
 		}
 	}
 
-	// Вывод
-	result := fmt.Sprintf("\n┌──────────────────────────────────────────────────┐\n")
-	result += fmt.Sprintf("│ Таблица: %-40s │\n", stmt.Table)
-	result += fmt.Sprintf("├──────────────────────────────────────────────────┤\n")
-
-	for _, row := range rows {
-		if allColumns {
-			vals := make([]string, len(row.Values))
-			for i, v := range row.Values {
-				vals[i] = formatValue(v)
-			}
-			result += fmt.Sprintf("│ %s\n", strings.Join(vals, " | "))
-		} else {
-			projected := make([]string, len(colIndexes))
-			for i, idx := range colIndexes {
-				projected[i] = formatValue(row.Values[idx])
-			}
-			result += fmt.Sprintf("│ %s\n", strings.Join(projected, " | "))
+	// Формируем результат
+	resultRows := make([][]interface{}, len(rows))
+	for i, row := range rows {
+		resultRow := make([]interface{}, len(colIndexes))
+		for j, idx := range colIndexes {
+			resultRow[j] = row.Values[idx]
 		}
+		resultRows[i] = resultRow
 	}
 
-	result += fmt.Sprintf("├──────────────────────────────────────────────────┤\n")
-	result += fmt.Sprintf("│ Строк: %-42d │\n", len(rows))
-	result += fmt.Sprintf("└──────────────────────────────────────────────────┘\n")
-	return result, nil
+	return &QueryResult{
+		Type:    "SELECT",
+		Columns: colNames,
+		Rows:    resultRows,
+	}, nil
 }
 
-// executeDelete — реальное удаление
-func (e *Executor) executeDelete(stmt *parser.DeleteStatement) (string, error) {
+// executeDelete — DELETE
+func (e *Executor) executeDelete(stmt *parser.DeleteStatement) (*QueryResult, error) {
 	table, ok := e.Tables[stmt.Table]
 	if !ok {
-		return "", fmt.Errorf("таблица '%s' не найдена", stmt.Table)
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: fmt.Sprintf("таблица '%s' не найдена", stmt.Table),
+		}, nil
 	}
 
 	rows, err := table.ScanFull()
 	if err != nil {
-		return "", err
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: err.Error(),
+		}, nil
 	}
 
-	// Фильтруем
 	if stmt.Condition != nil {
 		rows = filterRows(rows, table.Schema, stmt.Condition)
 	}
 
 	deleted := 0
 	for _, row := range rows {
-		err := table.DeleteRow(row.RID)
-		if err != nil {
-			continue
+		if err := table.DeleteRow(row.RID); err == nil {
+			deleted++
 		}
-		deleted++
 	}
 
-	// Сбрасываем изменения на диск
 	table.BufferPool.FlushAll()
 
-	return fmt.Sprintf("✓ Удалено %d строк", deleted), nil
+	return &QueryResult{
+		Type:         "DELETE",
+		AffectedRows: int64(deleted),
+		Columns:      []string{"message"},
+		Rows:         [][]interface{}{{fmt.Sprintf("✓ Удалено %d строк", deleted)}},
+	}, nil
 }
 
-// executeUpdate — реальное обновление
-func (e *Executor) executeUpdate(stmt *parser.UpdateStatement) (string, error) {
+// executeUpdate — UPDATE
+func (e *Executor) executeUpdate(stmt *parser.UpdateStatement) (*QueryResult, error) {
 	table, ok := e.Tables[stmt.Table]
 	if !ok {
-		return "", fmt.Errorf("таблица '%s' не найдена", stmt.Table)
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: fmt.Sprintf("таблица '%s' не найдена", stmt.Table),
+		}, nil
 	}
 
 	rows, err := table.ScanFull()
 	if err != nil {
-		return "", err
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: err.Error(),
+		}, nil
 	}
 
 	if stmt.Condition != nil {
@@ -499,7 +551,6 @@ func (e *Executor) executeUpdate(stmt *parser.UpdateStatement) (string, error) {
 
 	updated := 0
 	for _, row := range rows {
-		// Создаём новые значения
 		newValues := make([]interface{}, len(row.Values))
 		copy(newValues, row.Values)
 
@@ -522,17 +573,19 @@ func (e *Executor) executeUpdate(stmt *parser.UpdateStatement) (string, error) {
 		}
 
 		newRow := &storage.Row{Values: newValues}
-		err := table.UpdateRow(row.RID, newRow)
-		if err != nil {
-			continue
+		if err := table.UpdateRow(row.RID, newRow); err == nil {
+			updated++
 		}
-		updated++
 	}
 
-	// Сбрасываем изменения на диск
 	table.BufferPool.FlushAll()
 
-	return fmt.Sprintf("✓ Обновлено %d строк", updated), nil
+	return &QueryResult{
+		Type:         "UPDATE",
+		AffectedRows: int64(updated),
+		Columns:      []string{"message"},
+		Rows:         [][]interface{}{{fmt.Sprintf("✓ Обновлено %d строк", updated)}},
+	}, nil
 }
 
 func rowsEqual(a, b *storage.Row) bool {
@@ -698,112 +751,122 @@ func applyLimitOffset(rows []*storage.Row, limit int, offset int) []*storage.Row
 }
 
 func computeAggregates(rows []*storage.Row, schema *storage.TableSchema, aggs []parser.Aggregate) map[string]interface{} {
-    result := make(map[string]interface{})
+	result := make(map[string]interface{})
 
-    for _, agg := range aggs {
-        key := agg.Func + "(" + agg.Column + ")"
-        
-        // COUNT(*) — особый случай (не требует колонки)
-        if strings.ToUpper(agg.Func) == "COUNT" && agg.Column == "*" {
-            result[key] = int64(len(rows))
-            continue
-        }
-        
-        colIdx := findColumnIndex(schema, agg.Column)
-        if colIdx == -1 {
-            result[key] = fmt.Sprintf("ОШИБКА: колонка '%s' не найдена", agg.Column)
-            continue
-        }
+	for _, agg := range aggs {
+		key := agg.Func + "(" + agg.Column + ")"
 
-        switch strings.ToUpper(agg.Func) {
-        case "COUNT":
-            var count int64
-            for _, row := range rows {
-                if colIdx < len(row.Values) && row.Values[colIdx] != nil {
-                    count++
-                }
-            }
-            result[key] = count
+		// COUNT(*) — особый случай (не требует колонки)
+		if strings.ToUpper(agg.Func) == "COUNT" && agg.Column == "*" {
+			result[key] = int64(len(rows))
+			continue
+		}
 
-        case "SUM":
-            var sum float64
-            for _, row := range rows {
-                if colIdx < len(row.Values) && row.Values[colIdx] != nil {
-                    sum += toFloat64(row.Values[colIdx])
-                }
-            }
-            result[key] = sum
+		colIdx := findColumnIndex(schema, agg.Column)
+		if colIdx == -1 {
+			result[key] = fmt.Sprintf("ОШИБКА: колонка '%s' не найдена", agg.Column)
+			continue
+		}
 
-        case "AVG":
-            var sum float64
-            var count int64
-            for _, row := range rows {
-                if colIdx < len(row.Values) && row.Values[colIdx] != nil {
-                    sum += toFloat64(row.Values[colIdx])
-                    count++
-                }
-            }
-            if count > 0 {
-                result[key] = sum / float64(count)
-            } else {
-                result[key] = 0.0
-            }
+		switch strings.ToUpper(agg.Func) {
+		case "COUNT":
+			var count int64
+			for _, row := range rows {
+				if colIdx < len(row.Values) && row.Values[colIdx] != nil {
+					count++
+				}
+			}
+			result[key] = count
 
-        case "MIN":
-            var min interface{}
-            for _, row := range rows {
-                if colIdx < len(row.Values) && row.Values[colIdx] != nil {
-                    val := row.Values[colIdx]
-                    if min == nil {
-                        min = val
-                    } else if toFloat64(val) < toFloat64(min) {
-                        min = val
-                    }
-                }
-            }
-            if min != nil {
-                result[key] = min
-            } else {
-                result[key] = nil
-            }
+		case "SUM":
+			var sum float64
+			for _, row := range rows {
+				if colIdx < len(row.Values) && row.Values[colIdx] != nil {
+					sum += toFloat64(row.Values[colIdx])
+				}
+			}
+			result[key] = sum
 
-        case "MAX":
-            var max interface{}
-            for _, row := range rows {
-                if colIdx < len(row.Values) && row.Values[colIdx] != nil {
-                    val := row.Values[colIdx]
-                    if max == nil {
-                        max = val
-                    } else if toFloat64(val) > toFloat64(max) {
-                        max = val
-                    }
-                }
-            }
-            if max != nil {
-                result[key] = max
-            } else {
-                result[key] = nil
-            }
-        }
-    }
+		case "AVG":
+			var sum float64
+			var count int64
+			for _, row := range rows {
+				if colIdx < len(row.Values) && row.Values[colIdx] != nil {
+					sum += toFloat64(row.Values[colIdx])
+					count++
+				}
+			}
+			if count > 0 {
+				result[key] = sum / float64(count)
+			} else {
+				result[key] = 0.0
+			}
 
-    return result
+		case "MIN":
+			var min interface{}
+			for _, row := range rows {
+				if colIdx < len(row.Values) && row.Values[colIdx] != nil {
+					val := row.Values[colIdx]
+					if min == nil {
+						min = val
+					} else if toFloat64(val) < toFloat64(min) {
+						min = val
+					}
+				}
+			}
+			if min != nil {
+				result[key] = min
+			} else {
+				result[key] = nil
+			}
+
+		case "MAX":
+			var max interface{}
+			for _, row := range rows {
+				if colIdx < len(row.Values) && row.Values[colIdx] != nil {
+					val := row.Values[colIdx]
+					if max == nil {
+						max = val
+					} else if toFloat64(val) > toFloat64(max) {
+						max = val
+					}
+				}
+			}
+			if max != nil {
+				result[key] = max
+			} else {
+				result[key] = nil
+			}
+		}
+	}
+
+	return result
 }
 
 func toFloat64(v interface{}) float64 {
-    switch val := v.(type) {
-    case int: return float64(val)
-    case int32: return float64(val)
-    case int64: return float64(val)
-    case float32: return float64(val)
-    case float64: return val
-    default: return 0
-    }
+	switch val := v.(type) {
+	case int:
+		return float64(val)
+	case int32:
+		return float64(val)
+	case int64:
+		return float64(val)
+	case float32:
+		return float64(val)
+	case float64:
+		return val
+	default:
+		return 0
+	}
 }
 
 func compareValues(a, b interface{}) int {
-    na, nb := toFloat64(a), toFloat64(b)
-    if na < nb { return -1 }
-    if na > nb { return 1 }
-    return 0
+	na, nb := toFloat64(a), toFloat64(b)
+	if na < nb {
+		return -1
+	}
+	if na > nb {
+		return 1
+	}
+	return 0
 }

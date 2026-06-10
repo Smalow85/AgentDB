@@ -1,9 +1,9 @@
 package executor
 
 import (
+	"os"
 	"strings"
 	"testing"
-	"os"
 
 	"agent-db/pkg/index"
 	"agent-db/pkg/storage"
@@ -12,6 +12,8 @@ import (
 func TestExecuteLeftJoin(t *testing.T) {
 	os.Remove("test_leftjoin.db")
 	disk, _ := storage.NewDiskManager("test_leftjoin.db")
+	defer disk.Close()
+
 	bp := storage.NewBufferPool(100, disk)
 
 	usersSchema := &storage.TableSchema{
@@ -58,22 +60,40 @@ func TestExecuteLeftJoin(t *testing.T) {
 		t.Fatalf("LEFT JOIN error: %v", err)
 	}
 
-	t.Logf("LEFT JOIN result:\n%s", result)
+	if result.Type == "ERROR" {
+		t.Fatalf("LEFT JOIN returned error: %s", result.Error)
+	}
 
-	// Проверяем что есть NULL для Charlie
-	if result == "" {
+	t.Logf("LEFT JOIN result: %+v", result)
+	t.Logf("Rows count: %d", len(result.Rows))
+
+	if len(result.Rows) == 0 {
 		t.Fatal("LEFT JOIN вернул пустой результат")
 	}
 
-	// Проверяем что есть NULL в результате
-	if !containsNull(result) {
-		t.Error("LEFT JOIN должен содержать NULL для Charlie")
+	// Проверяем что есть Charlie
+	foundCharlie := false
+	for _, row := range result.Rows {
+		rowStr := strings.Join(toStringSlice(row), " ")
+		if strings.Contains(rowStr, "Charlie") {
+			foundCharlie = true
+			// Проверяем что есть NULL для Charlie
+			if !strings.Contains(rowStr, "NULL") && !strings.Contains(rowStr, "<nil>") {
+				t.Errorf("Charlie должен иметь NULL в правой части, но получил: %s", rowStr)
+			}
+		}
+	}
+
+	if !foundCharlie {
+		t.Error("LEFT JOIN должен содержать Charlie с NULL")
 	}
 }
 
 func TestExecuteJoinWithWhere(t *testing.T) {
 	os.Remove("test_join_where.db")
 	disk, _ := storage.NewDiskManager("test_join_where.db")
+	defer disk.Close()
+
 	bp := storage.NewBufferPool(100, disk)
 
 	usersSchema := &storage.TableSchema{
@@ -117,20 +137,32 @@ func TestExecuteJoinWithWhere(t *testing.T) {
 		t.Fatalf("JOIN + WHERE error: %v", err)
 	}
 
-	t.Logf("JOIN + WHERE result:\n%s", result)
+	if result.Type == "ERROR" {
+		t.Fatalf("JOIN + WHERE returned error: %s", result.Error)
+	}
 
-	if result == "" {
+	t.Logf("JOIN + WHERE result: %+v", result)
+
+	if len(result.Rows) == 0 {
 		t.Fatal("JOIN + WHERE вернул пустой результат")
 	}
 
-	// Должна быть только Alice с заказами (Bob отфильтрован)
-	if containsString(result, "Bob") {
+	// Должна быть только Alice (Bob отфильтрован)
+	foundBob := false
+	for _, row := range result.Rows {
+		rowStr := strings.Join(toStringSlice(row), " ")
+		if strings.Contains(rowStr, "Bob") {
+			foundBob = true
+		}
+	}
+
+	if foundBob {
 		t.Error("JOIN + WHERE должен был отфильтровать Bob")
 	}
 }
 
 func containsNull(s string) bool {
-	return containsString(s, "NULL") || containsString(s, "<nil>")
+	return strings.Contains(s, "NULL") || strings.Contains(s, "<nil>")
 }
 
 func containsString(s, substr string) bool {

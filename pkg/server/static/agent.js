@@ -272,53 +272,86 @@ async function loadModels() {
 
         select.style.display = 'block';
 
-        // ✅ Сохраняем текущий выбор
-        const currentValue = select.value;
-
         select.innerHTML = '<option value="">Выберите модель...</option>';
         data.models.forEach(model => {
             const option = document.createElement('option');
-            option.value = model.id;
+            // ✅ Сохраняем как строку, но потом правильно парсим
+            option.value = String(model.id);
             option.textContent = model.display_name || model.name;
             select.appendChild(option);
         });
 
-        // ✅ Восстанавливаем выбор, если он ещё существует
         let selectedModel = null;
-        if (currentValue && data.models.some(m => String(m.id) === currentValue)) {
-            select.value = currentValue;
-            selectedModel = data.models.find(m => String(m.id) === currentValue);
+
+        // 1. localStorage
+        const savedModelId = localStorage.getItem('agentdb_active_model_id');
+        if (savedModelId && data.models.some(m => String(m.id) === savedModelId)) {
+            selectedModel = data.models.find(m => String(m.id) === savedModelId);
         }
 
+        // 2. settings API
         if (!selectedModel) {
-            const settings = await get('/api/config/settings');
-            const activeId = settings.settings?.active_model_id;
-            if (activeId) {
-                selectedModel = data.models.find(m => String(m.id) === String(activeId));
+            try {
+                const settings = await get('/api/config/settings');
+                const activeId = settings.settings?.active_model_id;
+                if (activeId && data.models.some(m => String(m.id) === String(activeId))) {
+                    selectedModel = data.models.find(m => String(m.id) === String(activeId));
+                }
+            } catch (e) {
+                console.warn('Could not load settings for model:', e);
             }
         }
 
+        // 3. default
         if (!selectedModel) {
             selectedModel = data.models.find(m => m.is_default);
         }
 
+        // 4. first
         if (!selectedModel && data.models.length > 0) {
             selectedModel = data.models[0];
-            await post('/api/config/models/active', { model_id: selectedModel.id });
         }
 
         if (selectedModel) {
-            select.value = selectedModel.id;
+            // ✅ Устанавливаем как строку (select value всегда строка)
+            select.value = String(selectedModel.id);
+            localStorage.setItem('agentdb_active_model_id', String(selectedModel.id));
             if (modelInfo) {
                 modelInfo.textContent = selectedModel.base_url;
             }
+
+            // ✅ Отправляем число на сервер
+            try {
+                const modelIdNumber = parseInt(selectedModel.id, 10);
+                console.log('[loadModels] Setting active model to:', modelIdNumber);
+                await post('/api/config/models/active', { model_id: modelIdNumber });
+            } catch (e) {
+                console.warn('Failed to sync active model to backend:', e);
+            }
         }
 
-        // ✅ Сохраняем обработчик
+        // ✅ Обработчик изменения
         select.onchange = async function () {
             if (!this.value || this.value === '') return;
-            const modelId = parseInt(this.value);
-            await post('/api/config/models/active', { model_id: modelId });
+
+            // ✅ Парсим в число
+            const modelId = parseInt(this.value, 10);
+            console.log('[onchange] Selected model ID:', modelId);
+
+            if (isNaN(modelId)) {
+                console.error('Invalid model ID:', this.value);
+                return;
+            }
+
+            localStorage.setItem('agentdb_active_model_id', this.value);
+            try {
+                const response = await post('/api/config/models/active', { model_id: modelId });
+                console.log('[onchange] Response:', response);
+            } catch (e) {
+                console.error('Failed to save active model:', e);
+                appendMessage('system', '❌ Не удалось сохранить выбор модели');
+            }
+
             const model = data.models.find(m => String(m.id) === String(this.value));
             if (modelInfo && model) modelInfo.textContent = model.base_url;
         };
@@ -355,22 +388,57 @@ async function loadProjects() {
             select.appendChild(option)
         })
 
-        const settings = await get('/api/config/settings')
-        let selectedProject = data.projects.find(p => String(p.id) === String(settings.settings?.active_project_id))
-        
-        if (!selectedProject) {
-            selectedProject = data.projects[0]
-            await post('/api/config/projects/active', { project_id: selectedProject.id })
+        // ✅ Восстанавливаем выбор: localStorage -> settings API -> first
+        let selectedProject = null
+
+        // 1. localStorage
+        const savedProjectId = localStorage.getItem('agentdb_active_project_id')
+        if (savedProjectId && data.projects.some(p => String(p.id) === savedProjectId)) {
+            selectedProject = data.projects.find(p => String(p.id) === savedProjectId)
         }
 
-        select.value = selectedProject.id
-        if (projectInfo) {
-            projectInfo.textContent = selectedProject.root_path
+        // 2. settings API
+        if (!selectedProject) {
+            try {
+                const settings = await get('/api/config/settings')
+                const activeId = settings.settings?.active_project_id
+                if (activeId && data.projects.some(p => String(p.id) === String(activeId))) {
+                    selectedProject = data.projects.find(p => String(p.id) === String(activeId))
+                }
+            } catch (e) {
+                console.warn('Could not load settings for project:', e)
+            }
+        }
+
+        // 3. First project
+        if (!selectedProject && data.projects.length > 0) {
+            selectedProject = data.projects[0]
+        }
+
+        if (selectedProject) {
+            select.value = String(selectedProject.id)
+            localStorage.setItem('agentdb_active_project_id', String(selectedProject.id))
+            if (projectInfo) {
+                projectInfo.textContent = selectedProject.root_path
+            }
+            document.getElementById('repo-path').value = selectedProject.root_path
+            try {
+                await post('/api/config/projects/active', { project_id: selectedProject.id })
+            } catch (e) {
+                console.warn('Failed to sync active project to backend:', e)
+            }
+            await parseRepo()
         }
         
         select.onchange = async function() {
             if (!this.value) return
-            await post('/api/config/projects/active', { project_id: parseInt(this.value) })
+            localStorage.setItem('agentdb_active_project_id', this.value)
+            try {
+                await post('/api/config/projects/active', { project_id: parseInt(this.value) })
+            } catch (e) {
+                console.error('Failed to save active project:', e)
+                appendMessage('system', '❌ Не удалось сохранить выбор проекта')
+            }
             const project = data.projects.find(p => String(p.id) === String(this.value))
             if (projectInfo && project) projectInfo.textContent = project.root_path
             document.getElementById('repo-path').value = project.root_path

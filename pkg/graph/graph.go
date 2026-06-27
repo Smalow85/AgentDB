@@ -758,3 +758,13 @@ func (g *Graph) GetAllReferences() []*Reference {
 	}
 	return refs
 }
+
+func (g *Graph) GetAllNodes() []*Node {
+	g.mu.RLock()
+	defer g.mu.RUnlock()
+	nodes := make([]*Node, 0, len(g.nodeByID))
+	for _, n := range g.nodeByID {
+		nodes = append(nodes, n)
+	}
+	return nodes
+}

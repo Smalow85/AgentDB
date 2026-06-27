@@ -1,3 +1,4 @@
+// pkg/agent/tools.go
 package agent
 
 import (
@@ -8,14 +9,17 @@ import (
 	"path/filepath"
 	"strings"
 
+	"agent-db/pkg/context"
 	"agent-db/pkg/graph"
 )
 
 type ToolExecutor struct {
-	PSIGraph *graph.Graph
+	PSIGraph    *graph.Graph
+	ProjectPath string
+	MemoryMgr   *context.MemoryManager
+	VersionID   int
 }
 
-// ParsedCall — ToolCall с распарсенными аргументами
 type ParsedCall struct {
 	Name string
 	Args map[string]string
@@ -34,35 +38,58 @@ func parseToolCall(call ToolCall) ParsedCall {
 }
 
 func (e *ToolExecutor) Execute(call ToolCall) string {
-	fmt.Printf("[TOOL_EXECUTOR]Toolcall: %s", call)
 	pc := parseToolCall(call)
-	fmt.Printf("[TOOL_EXECUTOR] Executing tool: %s with args: %+v", pc.Name, pc.Args)
+
+	// Логируем вызов инструмента
+	if e.MemoryMgr != nil {
+		e.MemoryMgr.AddObservation(0, e.VersionID, pc.Name, fmt.Sprintf("%+v", pc.Args), "", false)
+	}
+
+	var result string
 	switch pc.Name {
 	case "read_file":
-		return e.readFile(pc.Args["path"])
+		result = e.readFile(pc.Args["path"])
 	case "write_file":
-		return e.writeFile(pc.Args["path"], pc.Args["content"])
+		result = e.writeFile(pc.Args["path"], pc.Args["content"])
 	case "edit_file":
-		return e.editFile(pc.Args["path"], pc.Args["old_string"], pc.Args["new_string"])
+		result = e.editFile(pc.Args["path"], pc.Args["old_string"], pc.Args["new_string"])
 	case "delete_file":
-		return e.deleteFile(pc.Args["path"])
+		result = e.deleteFile(pc.Args["path"])
 	case "list_dir":
-		return e.listDir(pc.Args["path"])
+		result = e.listDir(pc.Args["path"])
 	case "run_command":
-		return e.runCommand(pc.Args["command"])
+		result = e.runCommand(pc.Args["command"])
 	case "get_class":
-		return e.psiGetClass(pc.Args["class"])
+		result = e.psiGetClass(pc.Args["class"])
 	case "find_callers":
-		return e.psiFindCallers(pc.Args["function"])
+		result = e.psiFindCallers(pc.Args["function"])
 	case "find_callees":
-		return e.psiFindCallees(pc.Args["function"])
+		result = e.psiFindCallees(pc.Args["function"])
 	default:
-		return fmt.Sprintf("Неизвестный инструмент: %s", pc.Name)
+		result = fmt.Sprintf("Неизвестный инструмент: %s", pc.Name)
 	}
+
+	// Обновляем наблюдение с результатом
+	if e.MemoryMgr != nil {
+		e.MemoryMgr.AddObservation(0, e.VersionID, pc.Name, fmt.Sprintf("%+v", pc.Args), result, true)
+	}
+
+	return result
+}
+
+func (e *ToolExecutor) resolvePath(path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	if e.ProjectPath != "" {
+		return filepath.Join(e.ProjectPath, path)
+	}
+	return path
 }
 
 func (e *ToolExecutor) readFile(path string) string {
-	content, err := os.ReadFile(path)
+	fullPath := e.resolvePath(path)
+	content, err := os.ReadFile(fullPath)
 	if err != nil {
 		return fmt.Sprintf("Ошибка чтения %s: %v", path, err)
 	}
@@ -70,16 +97,17 @@ func (e *ToolExecutor) readFile(path string) string {
 }
 
 func (e *ToolExecutor) writeFile(path, content string) string {
-	fmt.Printf("[TOOL_WRITE_FILE] Attempting to write to: %s", path)
-	os.MkdirAll(filepath.Dir(path), 0755)
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	fullPath := e.resolvePath(path)
+	os.MkdirAll(filepath.Dir(fullPath), 0755)
+	if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
 		return fmt.Sprintf("Ошибка записи: %v", err)
 	}
-	return fmt.Sprintf("✓ Файл %s записан (%d байт)", path, len(content))
+	return fmt.Sprintf("✓ Файл %s записан (%d байт)", fullPath, len(content))
 }
 
 func (e *ToolExecutor) editFile(path, oldStr, newStr string) string {
-	content, err := os.ReadFile(path)
+	fullPath := e.resolvePath(path)
+	content, err := os.ReadFile(fullPath)
 	if err != nil {
 		return fmt.Sprintf("Ошибка чтения: %v", err)
 	}
@@ -87,17 +115,19 @@ func (e *ToolExecutor) editFile(path, oldStr, newStr string) string {
 	if updated == string(content) {
 		return "Ошибка: строка не найдена"
 	}
-	os.WriteFile(path, []byte(updated), 0644)
-	return fmt.Sprintf("✓ Файл %s обновлён", path)
+	os.WriteFile(fullPath, []byte(updated), 0644)
+	return fmt.Sprintf("✓ Файл %s обновлён", fullPath)
 }
 
 func (e *ToolExecutor) deleteFile(path string) string {
-	os.Remove(path)
-	return fmt.Sprintf("✓ Файл %s удалён", path)
+	fullPath := e.resolvePath(path)
+	os.Remove(fullPath)
+	return fmt.Sprintf("✓ Файл %s удалён", fullPath)
 }
 
 func (e *ToolExecutor) listDir(path string) string {
-	entries, err := os.ReadDir(path)
+	fullPath := e.resolvePath(path)
+	entries, err := os.ReadDir(fullPath)
 	if err != nil {
 		return fmt.Sprintf("Ошибка: %v", err)
 	}

@@ -12,6 +12,8 @@
     <script src="agent.js"></script>
     <script src="context.js"></script>
     <script src="app.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 </head>
 
 <body>
@@ -25,9 +27,9 @@
 
             <!-- Навигация -->
             <nav class="nav">
-                <button class="nav-btn active" data-view="graph">📊 Граф</button>
+                <button class="nav-btn" data-view="graph">📊 Граф</button>
                 <button class="nav-btn" data-view="sql">💾 SQL</button>
-                <button class="nav-btn" data-view="agent">🤖 Агент</button>
+                <button class="nav-btn active" data-view="agent">🤖 Агент</button>
             </nav>
 
             <!-- Поиск -->
@@ -89,24 +91,34 @@
             <!-- View: Graph -->
             <div id="view-graph" class="view">
                 <div class="view-toolbar">
-                    <div class="filter-tags">
-                        <span class="tag active" data-filter="all">Все</span>
-                        <span class="tag" data-filter="class">Классы</span>
-                        <span class="tag" data-filter="function">Функции</span>
-                        <span class="tag" data-filter="call">Вызовы</span>
+                    <div class="filter-tags" id="filter-tags">
+                        <span class="tag active" data-type="file">📄 Файлы</span>
+                        <span class="tag active" data-type="class">📦 Классы</span>
+                        <span class="tag active" data-type="function">⚙️ Функции</span>
+                        <span class="tag active" data-type="call">📞 Вызовы</span>
                     </div>
                     <div class="graph-actions">
                         <input type="text" id="repo-path" placeholder="Путь к репозиторию" value=".">
                         <button class="btn-sm btn-primary" onclick="parseRepo()">🔍 Анализировать</button>
                         <span id="parse-status"></span>
-                        <button id="graph-back-btn" class="btn-sm" style="display:none">← Назад</button>
                         <button class="btn-sm" onclick="fitGraph()">По размеру</button>
                         <button class="btn-sm" onclick="resetGraph()">Сбросить</button>
                     </div>
                     <div class="graph-stats" id="graph-stats">📁 Загрузка...</div>
                 </div>
                 <div class="graph-container">
+                    <!-- Кнопка "Назад" теперь здесь (поверх canvas) -->
+                    <button id="graph-back-btn" class="graph-back-btn">← Назад к файлам</button>
                     <canvas id="graph-canvas"></canvas>
+                    <!-- Легенда -->
+                    <div class="graph-legend">
+                        <div class="legend-item"><span class="dot" style="background:#89b4fa"></span>Файл</div>
+                        <div class="legend-item"><span class="dot" style="background:#cba6f7"></span>Класс</div>
+                        <div class="legend-item"><span class="dot" style="background:#a6e3a1"></span>Метод</div>
+                        <div class="legend-item" style="margin-left:10px; border-left:1px solid #45475a; padding-left:15px;">
+                            <span style="color:#f9e2af">→ Вызов</span>
+                        </div>
+                    </div>
                 </div>
             </div>
 

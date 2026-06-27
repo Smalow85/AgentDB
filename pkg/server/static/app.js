@@ -1,5 +1,3 @@
-// static/app.js — исправленная версия
-
 let settingsSaveTimeout = null;
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -10,9 +8,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Граф — новая инициализация
     if (document.getElementById('graph-canvas')) {
-        initGraph();
-        setupFilters();
-        setupSearch();
+        console.log('Entering files view');
+        enterFilesView();
     }
 
     // Кнопка "Назад" для графа
@@ -125,18 +122,22 @@ function loadSettings() {
     }
 }
 
+// static/app.js — Исправленная версия
 async function parseRepo() {
     const pathInput = document.getElementById('repo-path');
-    const path = pathInput?.value;
     const statusSpan = document.getElementById('parse-status');
+
+    if (!pathInput) {
+        console.error("Element with ID 'repo-path' not found.");
+        return;
+    }
+    const path = pathInput.value.trim();
 
     if (!path) {
         if (statusSpan) statusSpan.textContent = '❌ Укажите путь';
         return;
     }
-
     if (statusSpan) statusSpan.textContent = '⏳ Анализируем...';
-
     try {
         const result = await post('/api/parse', { path });
         if (result.error) {
@@ -149,19 +150,13 @@ async function parseRepo() {
             setTimeout(() => {
                 if (typeof loadGraph === 'function') {
                     loadGraph();
+                } else {
+                    console.error("loadGraph function is not available");
                 }
-            }, 500);
+            }, 100); // Добавим небольшую задержку
         }
     } catch (err) {
-        console.error('Parse error:', err);
-        if (statusSpan) statusSpan.textContent = '❌ Ошибка: ' + err.message;
-    }
-}
-
-// Функция для обновления UI при смене представления графа
-function updateGraphUI() {
-    const backBtn = document.getElementById('graph-back-btn');
-    if (backBtn && typeof getNavigationStackLength === 'function') {
-        // Можно добавить логику обновления кнопки
+        if (statusSpan) statusSpan.textContent = '❌ ' + err.message;
+        console.error(err);
     }
 }

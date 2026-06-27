@@ -28,6 +28,20 @@ async function sendAgentMessage() {
         return;
     }
 
+    let projectPath = '';
+    const projectSelect = document.getElementById('project-select');
+    if (projectSelect && projectSelect.value) {
+        try {
+            const data = await get('/api/config/projects');
+            const selectedProject = data.projects?.find(p => String(p.id) === projectSelect.value);
+            if (selectedProject) {
+                projectPath = selectedProject.root_path;
+            }
+        } catch (e) {
+            console.warn('Could not get project path:', e);
+        }
+    }
+
     let data;
     try {
         data = await get('/api/config/models');
@@ -74,7 +88,8 @@ async function sendAgentMessage() {
         message: msg,
         llm_key: apiKey,
         base_url: baseURL,
-        model: model
+        model: model,
+        project_path: projectPath
     };
 
     try {

@@ -1,5 +1,4 @@
-// pkg/contextmgr/manager.go
-package contextmgr
+package context
 
 import (
 	"agent-db/pkg/executor"
@@ -83,10 +82,6 @@ func (cm *ContextManager) initTables() {
 		cm.exec.Execute(sql)
 	}
 	fmt.Println("✓ ContextManager tables initialized")
-}
-
-func escapeSQL(s string) string {
-	return strings.ReplaceAll(s, "'", "''")
 }
 
 // getQueryResultText извлекает текст из QueryResult

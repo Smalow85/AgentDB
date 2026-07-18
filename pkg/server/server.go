@@ -558,7 +558,7 @@ func (s *Server) handleAgentLoopStream(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	result, err := s.Exec.Execute(`
-		SELECT id, name, display_name, base_url, api_key, is_default
+		SELECT name, display_name, base_url, api_key, is_default, created_at, updated_at
 		FROM model_configs
 		ORDER BY is_default DESC, name ASC
 	`)
@@ -573,19 +573,6 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	if result.Type == "SELECT" && len(result.Rows) > 0 {
 		for _, row := range result.Rows {
 			if len(row) >= 6 {
-				var idStr string
-				switch v := row[0].(type) {
-				case int64:
-					idStr = fmt.Sprintf("%d", v)
-				case int:
-					idStr = fmt.Sprintf("%d", v)
-				case float64:
-					idStr = fmt.Sprintf("%.0f", v)
-				case string:
-					idStr = v
-				default:
-					idStr = fmt.Sprintf("%v", row[0])
-				}
 
 				isDefault := false
 				if len(row) > 5 && row[5] != nil {
@@ -602,11 +589,10 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 				}
 
 				models = append(models, map[string]interface{}{
-					"id":           idStr,
-					"name":         row[1],
-					"display_name": row[2],
-					"base_url":     row[3],
-					"api_key":      row[4],
+					"name":         row[0],
+					"display_name": row[1],
+					"base_url":     row[2],
+					"api_key":      row[3],
 					"is_default":   isDefault,
 				})
 			}
@@ -707,9 +693,9 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := s.Exec.Execute(`
-		SELECT id, name, root_path, description, is_active 
+		SELECT name, root_path, description, is_active, last_used, created_at 
 		FROM project_configs 
-		ORDER BY id DESC
+		ORDER BY name DESC
 	`)
 
 	if err != nil {

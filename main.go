@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"agent-db/pkg/executor"
 	"agent-db/pkg/server"
@@ -23,7 +26,6 @@ func main() {
 	defer disk.Close()
 
 	bp := storage.NewBufferPool(100, disk)
-	defer bp.FlushAll()
 
 	exec, err := executor.NewExecutor(bp, disk, "agentdb.catalog.json")
 	if err != nil {
@@ -37,8 +39,25 @@ func main() {
 	}
 
 	srv := server.NewServer(exec)
-	if err := srv.Start(":8080"); err != nil {
-		fmt.Printf("Ошибка сервера: %v\n", err)
-		os.Exit(1)
+
+	// ✅ Graceful shutdown по сигналам
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		if err := srv.Start(":8080"); err != nil {
+			fmt.Printf("Ошибка сервера: %v\n", err)
+			stop()
+		}
+	}()
+
+	<-ctx.Done()
+	fmt.Println("\n⏳ Завершение работа...")
+
+	// ✅ Финальный сброс
+	if err := bp.FlushAll(); err != nil {
+		fmt.Printf("Ошибка сброса буфера: %v\n", err)
 	}
+
+	fmt.Println("✓ Данные сохранены")
 }

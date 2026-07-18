@@ -2,7 +2,10 @@ package context
 
 import (
 	"agent-db/pkg/executor"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 )
@@ -12,29 +15,29 @@ import (
 type MemoryLevel int
 
 const (
-	Metaspace MemoryLevel = iota // глобальное, никогда не очищается
-	Heap                         // сессионное, очищается GC
-	Stack                        // стек вызовов, очищается при rollback
+	Metaspace MemoryLevel = iota
+	Heap
+	Stack
 )
 
 type Inference struct {
-	ID         int
+	ID         int64
 	SessionID  int
 	Conclusion string
 	Confidence float64
-	Type       string // 'fact', 'assumption', 'hypothesis', 'question'
-	Source     string // 'tool', 'llm', 'user'
-	VersionID  int    // в какой версии кода сделано
+	Type       string
+	Source     string
+	VersionID  int
 	CreatedAt  int64
 	ExpiresAt  int64
 	Metadata   map[string]interface{}
 }
 
 type Thought struct {
-	ID            int
+	ID            int64
 	SessionID     int
-	InstructionID int
-	Type          string // 'analysis', 'plan', 'reflection', 'decision'
+	InstructionID int64
+	Type          string
 	Content       string
 	Confidence    float64
 	VersionID     int
@@ -42,11 +45,11 @@ type Thought struct {
 }
 
 type Instruction struct {
-	ID          int
+	ID          int64
 	SessionID   int
-	ParentID    int
+	ParentID    int64
 	Content     string
-	Status      string // 'pending', 'executing', 'completed', 'failed'
+	Status      string
 	Depth       int
 	VersionID   int
 	CreatedAt   int64
@@ -64,7 +67,7 @@ type BufferItem struct {
 }
 
 type Observation struct {
-	ID        int
+	ID        int64
 	SessionID int
 	ToolName  string
 	Input     string
@@ -79,6 +82,11 @@ type InstructionNode struct {
 	Children    []InstructionNode
 }
 
+type Session struct {
+	ID           int
+	CurrentEpoch int
+}
+
 // ========== MEMORY MANAGER ==========
 
 type MemoryManager struct {
@@ -91,16 +99,98 @@ func NewMemoryManager(exec *executor.Executor) *MemoryManager {
 	return mm
 }
 
+// generateID — криптографически стойкий случайный int64
+func generateID() int64 {
+	b := make([]byte, 8)
+	_, err := rand.Read(b)
+	if err != nil {
+		// Fallback на timestamp + случайное
+		return time.Now().UnixNano() ^ int64(time.Now().Nanosecond())
+	}
+	return int64(binary.BigEndian.Uint64(b))
+}
+
 func (mm *MemoryManager) initTables() {
 	tables := []string{
+		`CREATE TABLE IF NOT EXISTS sessions (
+			id INT PRIMARY_KEY,
+			current_epoch INT DEFAULT 0,
+			created_at INT NOT_NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS instruction_stack (
+			id INT PRIMARY_KEY,
+			session_id INT NOT_NULL,
+			version_id INT NOT_NULL,
+			rolled_back INT DEFAULT 0,
+			parent_id INT,
+			depth INT DEFAULT 0,
+			content TEXT NOT_NULL,
+			status TEXT DEFAULT 'pending',
+			created_at INT NOT_NULL,
+			completed_at INT
+		)`,
+		`CREATE TABLE IF NOT EXISTS reasoning_space (
+			id INT PRIMARY_KEY,
+			session_id INT NOT_NULL,
+			version_id INT NOT_NULL,
+			rolled_back INT DEFAULT 0,
+			instruction_id INT,
+			thought_type TEXT NOT_NULL,
+			content TEXT NOT_NULL,
+			confidence REAL DEFAULT 0.5,
+			created_at INT NOT_NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS buffer_space (
+			id INT PRIMARY_KEY,
+			session_id INT NOT_NULL,
+			version_id INT NOT_NULL,
+			rolled_back INT DEFAULT 0,
+			key TEXT,
+			value TEXT,
+			ttl INT DEFAULT 300,
+			created_at INT NOT_NULL,
+			access_count INT DEFAULT 0,
+			last_access INT
+		)`,
+		`CREATE TABLE IF NOT EXISTS inference_space (
+			id INT PRIMARY_KEY,
+			session_id INT NOT_NULL,
+			version_id INT NOT_NULL,
+			rolled_back INT DEFAULT 0,
+			conclusion TEXT NOT_NULL,
+			confidence REAL DEFAULT 0.5,
+			inference_type TEXT DEFAULT 'assumption',
+			source TEXT,
+			created_at INT NOT_NULL,
+			expires_at INT
+		)`,
+		`CREATE TABLE IF NOT EXISTS metaspace (
+			id INT PRIMARY_KEY,
+			agent_id TEXT NOT_NULL,
+			version INT NOT_NULL,
+			content_type TEXT NOT_NULL,
+			content TEXT NOT_NULL,
+			priority INT DEFAULT 0,
+			is_active INT DEFAULT 1
+		)`,
 		`CREATE TABLE IF NOT EXISTS version_memory (
-            version_id INTEGER PRIMARY KEY,
-            instructions TEXT,
-            thoughts TEXT,
-            inferences TEXT,
-            buffer TEXT,
-            created_at INTEGER
-        )`,
+			version_id INT PRIMARY_KEY,
+			instructions TEXT,
+			thoughts TEXT,
+			inferences TEXT,
+			buffer TEXT,
+			created_at INT
+		)`,
+		`CREATE TABLE IF NOT EXISTS observations (
+			id INT PRIMARY_KEY,
+			session_id INT NOT_NULL,
+			version_id INT NOT_NULL,
+			tool_name TEXT,
+			input TEXT,
+			output TEXT,
+			success INT,
+			created_at INT
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_instructions_version ON instruction_stack(version_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_thoughts_version ON reasoning_space(version_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_inferences_version ON inference_space(version_id)`,
@@ -109,97 +199,45 @@ func (mm *MemoryManager) initTables() {
 	for _, sql := range tables {
 		mm.exec.Execute(sql)
 	}
-
-	// ✅ Инициализируем последовательности для ВСЕХ таблиц
-	mm.initSequences()
 }
 
-func (mm *MemoryManager) initSequences() {
-	tables := []string{
-		"instruction_stack",
-		"reasoning_space",
-		"inference_space",
-		"buffer_space",
-		"observations",
-		"sessions",
-	}
-	for _, table := range tables {
-		// Пробуем вставить — если запись уже есть, ошибка игнорируется
-		mm.exec.Execute(fmt.Sprintf(`
-            INSERT INTO _sequences (table_name, col_name, next_val) 
-            VALUES ('%s', 'id', 1)
-        `, table))
-	}
-}
-
-// ========== УПРАВЛЕНИЕ ID ==========
-
-// nextID — получает следующий ID для таблицы из _sequences
-func (mm *MemoryManager) nextID(tableName string) int {
-	// Получаем текущее значение
-	result, _ := mm.exec.Execute(fmt.Sprintf(`
-        SELECT next_val FROM _sequences 
-        WHERE table_name = '%s' AND col_name = 'id'
-    `, tableName))
-
-	current := 1
-	if val := mm.firstValue(result); val != "" {
-		fmt.Sscanf(val, "%d", &current)
-	}
-
-	// ✅ Обновляем последовательность (увеличиваем на 1)
-	mm.exec.Execute(fmt.Sprintf(`
-        UPDATE _sequences SET next_val = %d 
-        WHERE table_name = '%s' AND col_name = 'id'
-    `, current+1, tableName))
-
-	return current
-}
-
-// updateLastID — обновляет последний ID (для совместимости, использует nextID)
-func (mm *MemoryManager) updateLastID(tableName string, id int) {
-	// Обновляем _sequences на следующий ID
-	mm.exec.Execute(fmt.Sprintf(`
-        UPDATE _sequences SET next_val = %d 
-        WHERE table_name = '%s' AND col_name = 'id'
-    `, id+1, tableName))
-}
-
-// ========== METASPACE (глобальное) ==========
+// ========== METASPACE ==========
 
 func (mm *MemoryManager) SetMetaspace(key, value, contentType string, priority int) error {
-	now := time.Now().Unix()
+	id := generateID()
 	_, err := mm.exec.Execute(fmt.Sprintf(`
-		INSERT OR REPLACE INTO metaspace (key, value, content_type, priority, created_at, updated_at)
-		VALUES ('%s', '%s', '%s', %d, %d, %d)
-	`, escapeSQL(key), escapeSQL(value), contentType, priority, now, now))
+		INSERT INTO metaspace (id, agent_id, version, content_type, content, priority, is_active)
+		VALUES (%d, '%s', 1, '%s', '%s', %d, 1)
+	`, id, escapeSQL(key), contentType, escapeSQL(value), priority))
 	return err
 }
 
 func (mm *MemoryManager) GetMetaspace(key string) (string, error) {
-	result, _ := mm.exec.Execute(fmt.Sprintf(`SELECT value FROM metaspace WHERE key = '%s'`, escapeSQL(key)))
+	result, _ := mm.exec.Execute(fmt.Sprintf(
+		`SELECT content FROM metaspace WHERE agent_id = '%s' AND is_active = 1`, escapeSQL(key)))
 	return mm.firstValue(result), nil
 }
 
 func (mm *MemoryManager) GetAllMetaspace() map[string]string {
-	result, _ := mm.exec.Execute(`SELECT key, value FROM metaspace ORDER BY priority DESC`)
+	result, _ := mm.exec.Execute(`
+		SELECT agent_id, content FROM metaspace 
+		WHERE is_active = 1 
+		ORDER BY priority DESC
+	`)
 	return mm.toMap(result)
 }
 
-// ========== HEAP (память сессии) ==========
+// ========== HEAP ==========
 
 func (mm *MemoryManager) AddInference(sessionID, versionID int, conclusion string, confidence float64, inferenceType, source string) error {
 	now := time.Now().Unix()
 	expiresAt := now + 86400
-
-	// ✅ Получаем следующий ID
-	nextID := mm.nextID("inference_space")
+	id := generateID()
 
 	_, err := mm.exec.Execute(fmt.Sprintf(`
-        INSERT INTO inference_space (id, session_id, version_id, conclusion, confidence, inference_type, source, created_at, expires_at)
-        VALUES (%d, %d, %d, '%s', %f, '%s', '%s', %d, %d)
-    `, nextID, sessionID, versionID, escapeSQL(conclusion), confidence, inferenceType, source, now, expiresAt))
-
+		INSERT INTO inference_space (id, session_id, version_id, conclusion, confidence, inference_type, source, created_at, expires_at)
+		VALUES (%d, %d, %d, '%s', %f, '%s', '%s', %d, %d)
+	`, id, sessionID, versionID, escapeSQL(conclusion), confidence, inferenceType, source, now, expiresAt))
 	return err
 }
 
@@ -224,15 +262,12 @@ func (mm *MemoryManager) SetBuffer(sessionID, versionID int, key, value string, 
 	if ttl == 0 {
 		ttl = 300
 	}
-
-	// ✅ Получаем следующий ID
-	nextID := mm.nextID("buffer_space")
+	id := generateID()
 
 	_, err := mm.exec.Execute(fmt.Sprintf(`
-        INSERT INTO buffer_space (id, session_id, version_id, key, value, ttl, created_at)
-        VALUES (%d, %d, %d, '%s', '%s', %d, %d)
-    `, nextID, sessionID, versionID, escapeSQL(key), escapeSQL(value), ttl, now))
-
+		INSERT INTO buffer_space (id, session_id, version_id, key, value, ttl, created_at)
+		VALUES (%d, %d, %d, '%s', '%s', %d, %d)
+	`, id, sessionID, versionID, escapeSQL(key), escapeSQL(value), ttl, now))
 	return err
 }
 
@@ -250,8 +285,8 @@ func (mm *MemoryManager) GetBuffer(sessionID, versionID int, key string) (string
 	if val != "" {
 		mm.exec.Execute(fmt.Sprintf(`
 			UPDATE buffer_space SET access_count = access_count + 1, last_access = %d
-			WHERE session_id = %d AND key = '%s'
-		`, time.Now().Unix(), sessionID, escapeSQL(key)))
+			WHERE session_id = %d AND version_id = %d AND key = '%s'
+		`, time.Now().Unix(), sessionID, versionID, escapeSQL(key)))
 		return val, true
 	}
 	return "", false
@@ -263,48 +298,59 @@ func (mm *MemoryManager) AddObservation(sessionID, versionID int, toolName, inpu
 	if success {
 		successInt = 1
 	}
-
-	// ✅ Получаем следующий ID
-	nextID := mm.nextID("observations")
+	id := generateID()
 
 	_, err := mm.exec.Execute(fmt.Sprintf(`
-        INSERT INTO observations (id, session_id, version_id, tool_name, input, output, success, created_at)
-        VALUES (%d, %d, %d, '%s', '%s', '%s', %d, %d)
-    `, nextID, sessionID, versionID, escapeSQL(toolName), escapeSQL(input), escapeSQL(output), successInt, now))
-
+		INSERT INTO observations (id, session_id, version_id, tool_name, input, output, success, created_at)
+		VALUES (%d, %d, %d, '%s', '%s', '%s', %d, %d)
+	`, id, sessionID, versionID, escapeSQL(toolName), escapeSQL(input), escapeSQL(output), successInt, now))
 	return err
 }
 
-// ========== STACK (стек вызовов) ==========
+// ========== STACK ==========
 
-func (mm *MemoryManager) PushInstruction(sessionID, versionID int, content string, parentID int) (int, error) {
+func (mm *MemoryManager) PushInstruction(sessionID, versionID int, content string, parentID int64) (int64, error) {
+	log.Printf("[DEBUG] PushInstruction START: session=%d, version=%d, parent=%d", sessionID, versionID, parentID)
+
+	if err := mm.exec.BeginTransaction(); err != nil {
+		return 0, err
+	}
+
 	depth := 0
 	if parentID > 0 {
-		result, _ := mm.exec.Execute(fmt.Sprintf(`SELECT depth FROM instruction_stack WHERE id = %d`, parentID))
+		result, _ := mm.exec.ExecuteInTxWithResult(fmt.Sprintf(
+			`SELECT depth FROM instruction_stack WHERE id = %d`, parentID))
 		if d := mm.firstValue(result); d != "" {
 			fmt.Sscanf(d, "%d", &depth)
 			depth++
 		}
 	}
 
+	id := generateID()
+	log.Printf("[DEBUG] PushInstruction: id=%d", id)
+
 	now := time.Now().Unix()
+	sql := fmt.Sprintf(`
+		INSERT INTO instruction_stack (id, session_id, version_id, parent_id, content, depth, created_at)
+		VALUES (%d, %d, %d, %d, '%s', %d, %d)
+	`, id, sessionID, versionID, parentID, escapeSQL(content), depth, now)
 
-	// ✅ Получаем следующий ID из _sequences
-	nextID := mm.nextID("instruction_stack")
-
-	_, err := mm.exec.Execute(fmt.Sprintf(`
-        INSERT INTO instruction_stack (id, session_id, version_id, parent_id, content, status, depth, created_at)
-        VALUES (%d, %d, %d, %d, '%s', 'pending', %d, %d)
-    `, nextID, sessionID, versionID, parentID, escapeSQL(content), depth, now))
-
+	_, err := mm.exec.ExecuteInTx(sql)
 	if err != nil {
+		mm.exec.Rollback()
 		return 0, err
 	}
 
-	return nextID, nil
+	if err := mm.exec.Commit(); err != nil {
+		mm.exec.Rollback()
+		return 0, err
+	}
+
+	log.Printf("[DEBUG] PushInstruction success, id=%d", id)
+	return id, nil
 }
 
-func (mm *MemoryManager) PopInstruction(id int, success bool) error {
+func (mm *MemoryManager) PopInstruction(id int64, success bool) error {
 	status := "completed"
 	if !success {
 		status = "failed"
@@ -329,30 +375,27 @@ func (mm *MemoryManager) GetCurrentStack(sessionID, versionID int) []Instruction
 	return mm.parseInstructions(result)
 }
 
-func (mm *MemoryManager) AddThought(sessionID, versionID, instructionID int, thoughtType, content string, confidence float64) error {
+func (mm *MemoryManager) AddThought(sessionID, versionID int, instructionID int64, thoughtType, content string, confidence float64) error {
 	now := time.Now().Unix()
-
-	// ✅ Получаем следующий ID
-	nextID := mm.nextID("reasoning_space")
+	id := generateID()
 
 	_, err := mm.exec.Execute(fmt.Sprintf(`
-        INSERT INTO reasoning_space (id, session_id, version_id, instruction_id, thought_type, content, confidence, created_at)
-        VALUES (%d, %d, %d, %d, '%s', '%s', %f, %d)
-    `, nextID, sessionID, versionID, instructionID, thoughtType, escapeSQL(content), confidence, now))
-
+		INSERT INTO reasoning_space (id, session_id, version_id, instruction_id, thought_type, content, confidence, created_at)
+		VALUES (%d, %d, %d, %d, '%s', '%s', %f, %d)
+	`, id, sessionID, versionID, instructionID, thoughtType, escapeSQL(content), confidence, now))
 	return err
 }
 
-// ========== GC & CLEANUP ==========
+// ========== GC ==========
 
 func (mm *MemoryManager) GC(sessionID, versionID int) {
 	now := time.Now().Unix()
 
 	mm.exec.Execute(fmt.Sprintf(`
 		DELETE FROM buffer_space 
-		WHERE session_id = %d 
+		WHERE session_id = %d AND version_id = %d
 		  AND (created_at + ttl < %d OR rolled_back = 1)
-	`, sessionID, now))
+	`, sessionID, versionID, now))
 
 	weekAgo := now - 7*86400
 	mm.exec.Execute(fmt.Sprintf(`
@@ -368,7 +411,7 @@ func (mm *MemoryManager) GC(sessionID, versionID int) {
 	`, sessionID))
 }
 
-// ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+// ========== ВСПОМОГАТЕЛЬНЫЕ ==========
 
 func (mm *MemoryManager) firstValue(qr *executor.QueryResult) string {
 	if qr == nil || qr.Type == "ERROR" || len(qr.Rows) == 0 || len(qr.Rows[0]) == 0 {
@@ -401,7 +444,7 @@ func (mm *MemoryManager) parseInferences(qr *executor.QueryResult) []Inference {
 	for _, row := range qr.Rows {
 		if len(row) >= 5 {
 			inf := Inference{}
-			inf.ID = parseInt(fmt.Sprintf("%v", row[0]))
+			inf.ID = parseInt64(fmt.Sprintf("%v", row[0]))
 			inf.Conclusion = fmt.Sprintf("%v", row[1])
 			inf.Confidence = parseFloat(fmt.Sprintf("%v", row[2]))
 			inf.Type = fmt.Sprintf("%v", row[3])
@@ -420,9 +463,9 @@ func (mm *MemoryManager) parseInstructions(qr *executor.QueryResult) []Instructi
 	for _, row := range qr.Rows {
 		if len(row) >= 5 {
 			inst := Instruction{}
-			inst.ID = parseInt(fmt.Sprintf("%v", row[0]))
+			inst.ID = parseInt64(fmt.Sprintf("%v", row[0]))
 			if len(row) > 1 {
-				inst.ParentID = parseInt(fmt.Sprintf("%v", row[1]))
+				inst.ParentID = parseInt64(fmt.Sprintf("%v", row[1]))
 			}
 			inst.Content = fmt.Sprintf("%v", row[2])
 			inst.Status = fmt.Sprintf("%v", row[3])
@@ -444,8 +487,8 @@ func (mm *MemoryManager) parseThoughts(qr *executor.QueryResult) []Thought {
 	for _, row := range qr.Rows {
 		if len(row) >= 5 {
 			t := Thought{}
-			t.ID = parseInt(fmt.Sprintf("%v", row[0]))
-			t.InstructionID = parseInt(fmt.Sprintf("%v", row[1]))
+			t.ID = parseInt64(fmt.Sprintf("%v", row[0]))
+			t.InstructionID = parseInt64(fmt.Sprintf("%v", row[1]))
 			t.Type = fmt.Sprintf("%v", row[2])
 			t.Content = fmt.Sprintf("%v", row[3])
 			t.Confidence = parseFloat(fmt.Sprintf("%v", row[4]))
@@ -489,7 +532,6 @@ func (mm *MemoryManager) GetRecentThoughts(sessionID, versionID int, limit int) 
 	if limit <= 0 {
 		limit = 10
 	}
-
 	result, _ := mm.exec.Execute(fmt.Sprintf(`
 		SELECT id, instruction_id, thought_type, content, confidence, created_at
 		FROM reasoning_space 
@@ -499,11 +541,10 @@ func (mm *MemoryManager) GetRecentThoughts(sessionID, versionID int, limit int) 
 		ORDER BY created_at DESC
 		LIMIT %d
 	`, sessionID, versionID, limit))
-
 	return mm.parseThoughts(result)
 }
 
-func (mm *MemoryManager) GetThoughtsByInstruction(sessionID, versionID, instructionID int) []Thought {
+func (mm *MemoryManager) GetThoughtsByInstruction(sessionID, versionID int, instructionID int64) []Thought {
 	result, _ := mm.exec.Execute(fmt.Sprintf(`
 		SELECT id, instruction_id, thought_type, content, confidence, created_at
 		FROM reasoning_space 
@@ -513,7 +554,6 @@ func (mm *MemoryManager) GetThoughtsByInstruction(sessionID, versionID, instruct
 		  AND rolled_back = 0
 		ORDER BY created_at ASC
 	`, sessionID, versionID, instructionID))
-
 	return mm.parseThoughts(result)
 }
 
@@ -527,7 +567,6 @@ func (mm *MemoryManager) GetBufferKeys(sessionID, versionID int) []string {
 		  AND (created_at + ttl > %d)
 		ORDER BY access_count DESC
 	`, sessionID, versionID, time.Now().Unix()))
-
 	return mm.parseStringList(result)
 }
 
@@ -541,7 +580,6 @@ func (mm *MemoryManager) GetBufferAll(sessionID, versionID int) map[string]strin
 		  AND (created_at + ttl > %d)
 		ORDER BY access_count DESC
 	`, sessionID, versionID, time.Now().Unix()))
-
 	return mm.toMap(result)
 }
 
@@ -555,7 +593,6 @@ func (mm *MemoryManager) GetBufferByPrefix(sessionID, versionID int, prefix stri
 		  AND rolled_back = 0
 		  AND (created_at + ttl > %d)
 	`, sessionID, versionID, escapeSQL(prefix), time.Now().Unix()))
-
 	return mm.toMap(result)
 }
 
@@ -580,7 +617,7 @@ func (mm *MemoryManager) GetInstructionTree(sessionID, versionID int) []Instruct
 	return mm.buildInstructionTree(instructions, 0)
 }
 
-func (mm *MemoryManager) buildInstructionTree(instructions []Instruction, parentID int) []InstructionNode {
+func (mm *MemoryManager) buildInstructionTree(instructions []Instruction, parentID int64) []InstructionNode {
 	var result []InstructionNode
 	for _, inst := range instructions {
 		if inst.ParentID == parentID {
@@ -603,7 +640,6 @@ func (mm *MemoryManager) GetCurrentInstruction(sessionID, versionID int) *Instru
 		  AND status = 'executing'
 		LIMIT 1
 	`, sessionID, versionID))
-
 	instructions := mm.parseInstructions(result)
 	if len(instructions) > 0 {
 		return &instructions[0]
@@ -622,7 +658,6 @@ func (mm *MemoryManager) GetInferencesByType(sessionID, versionID int, inference
 		  AND (expires_at = 0 OR expires_at > %d)
 		ORDER BY confidence DESC
 	`, sessionID, versionID, inferenceType, time.Now().Unix()))
-
 	return mm.parseInferences(result)
 }
 
@@ -637,11 +672,10 @@ func (mm *MemoryManager) GetInferencesBySource(sessionID, versionID int, source 
 		  AND (expires_at = 0 OR expires_at > %d)
 		ORDER BY confidence DESC
 	`, sessionID, versionID, source, time.Now().Unix()))
-
 	return mm.parseInferences(result)
 }
 
-func (mm *MemoryManager) InvalidateInference(id int) error {
+func (mm *MemoryManager) InvalidateInference(id int64) error {
 	_, err := mm.exec.Execute(fmt.Sprintf(`
 		UPDATE inference_space SET rolled_back = 1, expires_at = %d
 		WHERE id = %d
@@ -669,7 +703,6 @@ type GCStats struct {
 
 func (mm *MemoryManager) GetGCStats(sessionID int) *GCStats {
 	stats := &GCStats{}
-
 	result, _ := mm.exec.Execute(fmt.Sprintf(`
 		SELECT 
 			(SELECT COUNT(*) FROM buffer_space WHERE session_id = %d AND rolled_back = 1),
@@ -684,15 +717,13 @@ func (mm *MemoryManager) GetGCStats(sessionID int) *GCStats {
 		stats.DeletedInferences = parseInt(fmt.Sprintf("%v", result.Rows[0][2]))
 		stats.DeletedObservations = parseInt(fmt.Sprintf("%v", result.Rows[0][3]))
 	}
-
 	return stats
 }
 
-// ========== МЕТОДЫ ДЛЯ ПОЛУЧЕНИЯ ДАННЫХ (для снапшотов) ==========
+// ========== МЕТОДЫ ДЛЯ СНАПШОТОВ ==========
 
 func (mm *MemoryManager) GetAllInstructions(sessionID int) []Instruction {
 	var instructions []Instruction
-
 	result, _ := mm.exec.Execute(fmt.Sprintf(`
 		SELECT id, session_id, content, depth, status, created_at
 		FROM instruction_stack 
@@ -703,11 +734,10 @@ func (mm *MemoryManager) GetAllInstructions(sessionID int) []Instruction {
 	if result == nil || result.Type == "ERROR" {
 		return instructions
 	}
-
 	for _, row := range result.Rows {
 		if len(row) >= 6 {
 			inst := Instruction{}
-			inst.ID = parseInt(fmt.Sprintf("%v", row[0]))
+			inst.ID = parseInt64(fmt.Sprintf("%v", row[0]))
 			inst.SessionID = parseInt(fmt.Sprintf("%v", row[1]))
 			inst.Content = fmt.Sprintf("%v", row[2])
 			inst.Depth = parseInt(fmt.Sprintf("%v", row[3]))
@@ -716,13 +746,11 @@ func (mm *MemoryManager) GetAllInstructions(sessionID int) []Instruction {
 			instructions = append(instructions, inst)
 		}
 	}
-
 	return instructions
 }
 
 func (mm *MemoryManager) GetAllThoughts(sessionID int) []Thought {
 	var thoughts []Thought
-
 	result, _ := mm.exec.Execute(fmt.Sprintf(`
 		SELECT id, session_id, thought_type, content, confidence, created_at
 		FROM reasoning_space 
@@ -733,11 +761,10 @@ func (mm *MemoryManager) GetAllThoughts(sessionID int) []Thought {
 	if result == nil || result.Type == "ERROR" {
 		return thoughts
 	}
-
 	for _, row := range result.Rows {
 		if len(row) >= 6 {
 			t := Thought{}
-			t.ID = parseInt(fmt.Sprintf("%v", row[0]))
+			t.ID = parseInt64(fmt.Sprintf("%v", row[0]))
 			t.SessionID = parseInt(fmt.Sprintf("%v", row[1]))
 			t.Type = fmt.Sprintf("%v", row[2])
 			t.Content = fmt.Sprintf("%v", row[3])
@@ -746,13 +773,11 @@ func (mm *MemoryManager) GetAllThoughts(sessionID int) []Thought {
 			thoughts = append(thoughts, t)
 		}
 	}
-
 	return thoughts
 }
 
 func (mm *MemoryManager) GetAllInferences(sessionID int) []Inference {
 	var inferences []Inference
-
 	result, _ := mm.exec.Execute(fmt.Sprintf(`
 		SELECT id, session_id, conclusion, confidence, inference_type, source, created_at
 		FROM inference_space 
@@ -763,11 +788,10 @@ func (mm *MemoryManager) GetAllInferences(sessionID int) []Inference {
 	if result == nil || result.Type == "ERROR" {
 		return inferences
 	}
-
 	for _, row := range result.Rows {
 		if len(row) >= 7 {
 			inf := Inference{}
-			inf.ID = parseInt(fmt.Sprintf("%v", row[0]))
+			inf.ID = parseInt64(fmt.Sprintf("%v", row[0]))
 			inf.SessionID = parseInt(fmt.Sprintf("%v", row[1]))
 			inf.Conclusion = fmt.Sprintf("%v", row[2])
 			inf.Confidence = parseFloat(fmt.Sprintf("%v", row[3]))
@@ -777,13 +801,11 @@ func (mm *MemoryManager) GetAllInferences(sessionID int) []Inference {
 			inferences = append(inferences, inf)
 		}
 	}
-
 	return inferences
 }
 
 func (mm *MemoryManager) GetAllBuffer(sessionID int) map[string]BufferItem {
 	buffer := make(map[string]BufferItem)
-
 	result, _ := mm.exec.Execute(fmt.Sprintf(`
 		SELECT key, value, ttl, created_at
 		FROM buffer_space 
@@ -793,7 +815,6 @@ func (mm *MemoryManager) GetAllBuffer(sessionID int) map[string]BufferItem {
 	if result == nil || result.Type == "ERROR" {
 		return buffer
 	}
-
 	for _, row := range result.Rows {
 		if len(row) >= 4 && row[0] != nil {
 			item := BufferItem{}
@@ -806,11 +827,10 @@ func (mm *MemoryManager) GetAllBuffer(sessionID int) map[string]BufferItem {
 			buffer[item.Key] = item
 		}
 	}
-
 	return buffer
 }
 
-// ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ПАРСИНГА ==========
+// ========== ПАРСИНГ ==========
 
 func parseInt(s string) int {
 	var i int
@@ -822,12 +842,6 @@ func parseInt64(s string) int64 {
 	var i int64
 	fmt.Sscanf(s, "%d", &i)
 	return i
-}
-
-func parseFloat64(s string) float64 {
-	var f float64
-	fmt.Sscanf(s, "%f", &f)
-	return f
 }
 
 func parseFloat(s string) float64 {
@@ -843,30 +857,24 @@ func escapeSQL(s string) string {
 }
 
 func (mm *MemoryManager) GetOrCreateSession(sessionID int) (*Session, error) {
-	// Проверяем существование
-	result, err := mm.exec.Execute(fmt.Sprintf("SELECT id, current_epoch FROM sessions WHERE id = %d", sessionID))
+	result, err := mm.exec.Execute(fmt.Sprintf(
+		"SELECT id, current_epoch FROM sessions WHERE id = %d", sessionID))
 	if err != nil {
 		return nil, err
 	}
 
-	// Если сессии нет — создаём
 	if result == nil || result.Type == "ERROR" || len(result.Rows) == 0 {
 		now := time.Now().Unix()
-
-		// ✅ Получаем следующий ID для сессии
-		nextID := mm.nextID("sessions")
-
 		_, err := mm.exec.Execute(fmt.Sprintf(`
-            INSERT INTO sessions (id, current_epoch, created_at)
-            VALUES (%d, 0, %d)
-        `, nextID, now))
+			INSERT INTO sessions (id, current_epoch, created_at)
+			VALUES (%d, 0, %d)
+		`, sessionID, now))
 		if err != nil {
 			return nil, fmt.Errorf("ошибка создания сессии: %w", err)
 		}
-		return &Session{ID: nextID, CurrentEpoch: 0}, nil
+		return &Session{ID: sessionID, CurrentEpoch: 0}, nil
 	}
 
-	// Парсим эпоху
 	epoch := 0
 	if len(result.Rows) > 0 && len(result.Rows[0]) > 1 && result.Rows[0][1] != nil {
 		switch v := result.Rows[0][1].(type) {
@@ -876,6 +884,5 @@ func (mm *MemoryManager) GetOrCreateSession(sessionID int) (*Session, error) {
 			epoch = v
 		}
 	}
-
 	return &Session{ID: sessionID, CurrentEpoch: epoch}, nil
 }

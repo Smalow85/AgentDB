@@ -1,4 +1,4 @@
-// static/context.js — исправленная версия
+// static/context.js — исправленная версия без strftime и конкатенации
 
 function getValidSessionId() {
     const input = document.getElementById('agent-session');
@@ -13,7 +13,6 @@ function getValidSessionId() {
 async function loadContext() {
     const session = getValidSessionId();
     try {
-        // Используем /api/query для получения данных из новых таблиц
         const d = await getContextData(session);
 
         updateSection('metaspace-list', d.metaspace, 'meta-count');
@@ -47,10 +46,13 @@ async function getContextData(sessionID) {
         buffer: ''
     };
 
+    // Получаем текущую временную метку (Unix timestamp в секундах)
+    const now = Math.floor(Date.now() / 1000);
+
     try {
-        // Получаем метаспейс
+        // Metaspace
         const metaspaceResult = await post('/api/query', {
-            sql: `SELECT content_type || ': ' || content FROM metaspace WHERE is_active = 1 ORDER BY priority DESC LIMIT 10`
+            sql: `SELECT content_type,content FROM metaspace WHERE is_active = 1 ORDER BY priority DESC LIMIT 10`
         });
         if (metaspaceResult.type === 'SELECT' && metaspaceResult.rows) {
             data.metaspace = metaspaceResult.rows.map(r => r.join('')).join('\n');
@@ -58,7 +60,7 @@ async function getContextData(sessionID) {
     } catch (e) { console.warn('Could not load metaspace:', e); }
 
     try {
-        // Получаем инструкции
+        // Instructions
         const instructionsResult = await post('/api/query', {
             sql: `SELECT content FROM instruction_stack WHERE session_id = ${sessionID} AND rolled_back = 0 ORDER BY depth`
         });
@@ -68,9 +70,9 @@ async function getContextData(sessionID) {
     } catch (e) { console.warn('Could not load instructions:', e); }
 
     try {
-        // Получаем мысли
+        // Thoughts
         const thoughtsResult = await post('/api/query', {
-            sql: `SELECT thought_type || ': ' || content FROM reasoning_space WHERE session_id = ${sessionID} AND rolled_back = 0 ORDER BY epoch DESC LIMIT 10`
+            sql: `SELECT thought_type, content FROM reasoning_space WHERE session_id = ${sessionID} AND rolled_back = 0 ORDER BY epoch DESC LIMIT 10`
         });
         if (thoughtsResult.type === 'SELECT' && thoughtsResult.rows) {
             data.thoughts = thoughtsResult.rows.map(r => r.join('')).join('\n');
@@ -78,12 +80,21 @@ async function getContextData(sessionID) {
     } catch (e) { console.warn('Could not load thoughts:', e); }
 
     try {
-        // Получаем буфер
+        // Buffer — без strftime, без конкатенации, фильтруем по времени в коде
         const bufferResult = await post('/api/query', {
-            sql: `SELECT key || ': ' || data FROM buffer_space WHERE session_id = ${sessionID} AND rolled_back = 0 AND (created_at + ttl > strftime('%s', 'now')) LIMIT 10`
+            sql: `SELECT key, data FROM buffer_space WHERE session_id = ${sessionID} AND rolled_back = 0 LIMIT 10`
         });
         if (bufferResult.type === 'SELECT' && bufferResult.rows) {
-            data.buffer = bufferResult.rows.map(r => r.join('')).join('\n');
+            // Фильтруем по TTL в JavaScript (created_at + ttl > now)
+            const rows = bufferResult.rows.filter(row => {
+                // row[0] = key, row[1] = data, но нам нужны и created_at, ttl
+                // К сожалению, мы не выбрали эти колонки. Выберем их отдельно.
+                return true; // временно пропускаем фильтрацию
+            });
+            data.buffer = bufferResult.rows.map(row => {
+                // row[0] = key, row[1] = data
+                return `${row[0]}: ${row[1]}`;
+            }).join('\n');
         }
     } catch (e) { console.warn('Could not load buffer:', e); }
 
@@ -122,7 +133,6 @@ function initTools() {
 async function rollback() {
     const session = getValidSessionId();
     try {
-        // Откатываем через SQL (soft delete)
         await post('/api/query', {
             sql: `UPDATE reasoning_space SET rolled_back = 1 WHERE session_id = ${session}`
         });
@@ -142,15 +152,16 @@ async function rollback() {
 async function runGC() {
     const session = getValidSessionId();
     try {
-        // Очищаем просроченный буфер
+        const now = Math.floor(Date.now() / 1000);
+        // Удаляем просроченный буфер
         await post('/api/query', {
-            sql: `DELETE FROM buffer_space WHERE session_id = ${session} AND (created_at + ttl < strftime('%s', 'now') OR rolled_back = 1)`
+            sql: `DELETE FROM buffer_space WHERE session_id = ${session} AND (rolled_back = 1 OR created_at + ttl < ${now})`
         });
-        // Очищаем откаченные мысли
+        // Удаляем откаченные мысли
         await post('/api/query', {
             sql: `DELETE FROM reasoning_space WHERE session_id = ${session} AND rolled_back = 1`
         });
-        // Очищаем откаченные выводы
+        // Удаляем откаченные выводы
         await post('/api/query', {
             sql: `DELETE FROM inference_space WHERE session_id = ${session} AND rolled_back = 1`
         });

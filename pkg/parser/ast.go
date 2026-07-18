@@ -22,22 +22,22 @@ const (
 )
 
 type SelectStatement struct {
-    Table      string
-    Columns    []string       // имена колонок (для "*" или обычных)
-    Aggregates []Aggregate    // агрегатные функции
-    Condition  *BinaryOp
-    Join       *JoinClause
-    OrderBy    string
-    OrderDir   string
-    Limit      int
-    Offset     int
-    GroupBy    string         // для будущего GROUP BY
+	Table      string
+	Columns    []string    // имена колонок (для "*" или обычных)
+	Aggregates []Aggregate // агрегатные функции
+	Condition  *BinaryOp
+	Join       *JoinClause
+	OrderBy    string
+	OrderDir   string
+	Limit      int
+	Offset     int
+	GroupBy    string // для будущего GROUP BY
 }
 
 type Aggregate struct {
-    Func     string // COUNT, SUM, AVG, MIN, MAX
-    Column   string // имя колонки или "*"
-    Alias    string // опциональный алиас
+	Func   string // COUNT, SUM, AVG, MIN, MAX
+	Column string // имя колонки или "*"
+	Alias  string // опциональный алиас
 }
 
 type JoinClause struct {
@@ -56,9 +56,9 @@ func (s *SelectStatement) String() string {
 
 // InsertStatement — INSERT
 type InsertStatement struct {
-    Table   string
-    Columns []string  // новые
-    Values  []Expression
+	Table   string
+	Columns []string // новые
+	Values  []Expression
 }
 
 func (s *InsertStatement) stmt() {}
@@ -68,9 +68,9 @@ func (s *InsertStatement) String() string {
 
 // CreateTableStatement — CREATE TABLE
 type CreateTableStatement struct {
-    Table      string
-    Columns    []ColumnDef
-    IfNotExists bool  // новое
+	Table       string
+	Columns     []ColumnDef
+	IfNotExists bool // новое
 }
 
 func (s *CreateTableStatement) stmt() {}
@@ -80,15 +80,15 @@ func (s *CreateTableStatement) String() string {
 
 // ColumnDef в CREATE TABLE
 type ColumnDef struct {
-    Name          string
-    Type          string
-    NotNull       bool
-    PrimaryKey    bool
-    AutoIncrement bool  // ← новое
-    Unique        bool
-    Default       string
-    Check         string
-    References    string
+	Name          string
+	Type          string
+	NotNull       bool
+	PrimaryKey    bool
+	AutoIncrement bool // ← новое
+	Unique        bool
+	Default       string
+	Check         string
+	References    string
 }
 
 // Expression — значение в INSERT/SET
@@ -174,20 +174,21 @@ func (s *UpdateStatement) String() string {
 
 // FuncCall — вызов функции (COUNT, SUM, AVG, MIN, MAX)
 type FuncCall struct {
-    Name     string // COUNT, SUM, AVG, MIN, MAX
-    Argument Expression // колонка или "*"
+	Name     string     // COUNT, SUM, AVG, MIN, MAX
+	Argument Expression // колонка или "*"
 }
 
 func (f *FuncCall) expr() {}
 func (f *FuncCall) String() string {
-    return fmt.Sprintf("%s(%s)", f.Name, f.Argument)
+	return fmt.Sprintf("%s(%s)", f.Name, f.Argument)
 }
 
 type DropTableStatement struct {
-    Table string
+	Table    string
+	IfExists bool
 }
 
 func (s *DropTableStatement) stmt() {}
 func (s *DropTableStatement) String() string {
-    return fmt.Sprintf("DROP TABLE %s", s.Table)
+	return fmt.Sprintf("DROP TABLE %s", s.Table)
 }

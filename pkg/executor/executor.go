@@ -5,19 +5,26 @@ import (
 	"agent-db/pkg/index"
 	"agent-db/pkg/parser"
 	"agent-db/pkg/storage"
+	"agent-db/pkg/utils"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Executor выполняет SQL-запросы
 type Executor struct {
-	Catalog *catalog.Catalog
-	Tables  map[string]*storage.HeapFile
-	Indexes map[string]*index.BTree // "table.column" -> индекс
-	BP      *storage.BufferPool
-	Disk    *storage.DiskManager
+	Catalog       *catalog.Catalog
+	Tables        map[string]*storage.HeapFile
+	Indexes       map[string]*index.BTree
+	BP            *storage.BufferPool
+	Disk          *storage.DiskManager
+	inTransaction bool
+	txQueries     []string
+	txResults     []*QueryResult
+	txMu          sync.Mutex
 }
 
 // NewExecutor создаёт исполнитель
@@ -47,13 +54,145 @@ func NewExecutor(bp *storage.BufferPool, disk *storage.DiskManager, catalogPath 
 	return exec, nil
 }
 
+// ========== ТРАНЗАКЦИИ ==========
+
+func (e *Executor) BeginTransaction() error {
+	e.txMu.Lock()
+	defer e.txMu.Unlock()
+
+	if e.inTransaction {
+		return fmt.Errorf("транзакция уже активна")
+	}
+
+	e.inTransaction = true
+	e.txQueries = []string{}
+	e.txResults = []*QueryResult{}
+	log.Printf("[DEBUG] Transaction started")
+	return nil
+}
+
+func (e *Executor) Commit() error {
+	log.Printf("[DEBUG] Commit: called")
+
+	e.txMu.Lock()
+	defer e.txMu.Unlock()
+
+	if !e.inTransaction {
+		return fmt.Errorf("нет активной транзакции")
+	}
+
+	log.Printf("[DEBUG] Commit: %d запросов в транзакции", len(e.txQueries))
+
+	for i, query := range e.txQueries {
+		log.Printf("[DEBUG] Commit: executing query %d: %s", i, query)
+
+		result, err := e.Execute(query)
+		if err != nil {
+			log.Printf("[ERROR] Commit: query %d error: %v", i, err)
+			e.inTransaction = false
+			e.txQueries = nil
+			e.txResults = nil
+			return fmt.Errorf("ошибка выполнения транзакции на запросе %d: %w", i, err)
+		}
+		e.txResults = append(e.txResults, result)
+	}
+
+	// ✅ СБРОС НА ДИСК — ключевое исправление
+	if err := e.BP.FlushAll(); err != nil {
+		log.Printf("[ERROR] Commit: flush error: %v", err)
+		e.inTransaction = false
+		e.txQueries = nil
+		e.txResults = nil
+		return fmt.Errorf("ошибка сброса на диск: %w", err)
+	}
+
+	e.inTransaction = false
+	e.txQueries = nil
+
+	log.Printf("[DEBUG] Commit: success, flushed to disk")
+	return nil
+}
+
+func (e *Executor) Rollback() error {
+	e.txMu.Lock()
+	defer e.txMu.Unlock()
+
+	if !e.inTransaction {
+		return fmt.Errorf("нет активной транзакции")
+	}
+
+	e.inTransaction = false
+	e.txQueries = nil
+	e.txResults = nil
+	log.Printf("[DEBUG] Transaction rolled back")
+	return nil
+}
+
+// ExecuteInTx — добавляет запрос в транзакцию (для INSERT/UPDATE/DELETE)
+func (e *Executor) ExecuteInTx(query string) (*QueryResult, error) {
+	log.Printf("[DEBUG] ExecuteInTx: adding query: %s", query)
+
+	e.txMu.Lock()
+	defer e.txMu.Unlock()
+
+	if !e.inTransaction {
+		return nil, fmt.Errorf("нет активной транзакции")
+	}
+
+	// Добавляем запрос в очередь
+	e.txQueries = append(e.txQueries, query)
+	log.Printf("[DEBUG] ExecuteInTx: query added, total: %d", len(e.txQueries))
+
+	return &QueryResult{
+		Type: "PENDING",
+	}, nil
+}
+
+// ExecuteInTxWithResult — выполняет запрос СРАЗУ внутри транзакции (для SELECT)
+func (e *Executor) ExecuteInTxWithResult(query string) (*QueryResult, error) {
+	log.Printf("[DEBUG] ExecuteInTxWithResult: executing: %s", query)
+
+	e.txMu.Lock()
+	defer e.txMu.Unlock()
+
+	if !e.inTransaction {
+		return nil, fmt.Errorf("нет активной транзакции")
+	}
+
+	// ✅ Выполняем запрос сразу
+	result, err := e.Execute(query)
+	if err != nil {
+		return nil, err
+	}
+
+	// Добавляем в историю (но не будем выполнять повторно при коммите)
+	e.txQueries = append(e.txQueries, query)
+	e.txResults = append(e.txResults, result)
+
+	return result, nil
+}
+
+//===========================
+
 // ListTables возвращает список таблиц
 func (e *Executor) ListTables() []string {
 	return e.Catalog.ListTables()
 }
 
-// Execute выполняет SQL-запрос и возвращает структурированный результат
-func (e *Executor) Execute(query string) (*QueryResult, error) {
+func (e *Executor) Execute(query string) (result *QueryResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("[PANIC] Execute recovered: %v", r)
+			result = &QueryResult{
+				Type:  "ERROR",
+				Error: fmt.Sprintf("внутренняя ошибка: %v", r),
+			}
+			err = nil
+		}
+	}()
+
+	fmt.Printf("[DEBUG] Executing SQL: %s", query)
+
 	stmt, err := parser.Parse(query)
 	if err != nil {
 		return &QueryResult{
@@ -62,29 +201,49 @@ func (e *Executor) Execute(query string) (*QueryResult, error) {
 		}, nil
 	}
 
+	// ✅ Убрали return из switch, сохраняем в переменные
 	switch s := stmt.(type) {
 	case *parser.CreateTableStatement:
-		return e.executeCreate(s)
+		result, err = e.executeCreate(s)
 	case *parser.CreateIndexStatement:
-		return e.executeCreateIndex(s)
+		result, err = e.executeCreateIndex(s)
 	case *parser.InsertStatement:
-		return e.executeInsert(s)
+		result, err = e.executeInsert(s)
 	case *parser.SelectStatement:
 		return e.executeSelect(s)
 	case *parser.DeleteStatement:
-		return e.executeDelete(s)
+		result, err = e.executeDelete(s)
 	case *parser.UpdateStatement:
-		return e.executeUpdate(s)
+		result, err = e.executeUpdate(s)
+	case *parser.DropTableStatement:
+		result, err = e.executeDrop(s)
 	default:
 		return &QueryResult{
 			Type:  "ERROR",
 			Error: fmt.Sprintf("неизвестный тип запроса: %T", s),
 		}, nil
 	}
+
+	// ✅ Теперь этот код ВЫПОЛНЯЕТСЯ
+	if !e.inTransaction && result != nil && result.Type != "ERROR" {
+		switch stmt.(type) {
+		case *parser.CreateTableStatement, *parser.CreateIndexStatement,
+			*parser.InsertStatement, *parser.DeleteStatement,
+			*parser.UpdateStatement, *parser.DropTableStatement:
+			if flushErr := e.BP.FlushAll(); flushErr != nil {
+				log.Printf("[ERROR] Execute: auto-flush failed: %v", flushErr)
+			} else {
+				log.Printf("[DEBUG] Execute: auto-flush OK")
+			}
+		}
+	}
+
+	return result, err
 }
 
 // executeCreate — CREATE TABLE
 func (e *Executor) executeCreate(stmt *parser.CreateTableStatement) (*QueryResult, error) {
+	fmt.Printf("[DEBUG] Creating table %s", stmt.Table)
 	columns := make([]storage.ColumnDef, 0, len(stmt.Columns))
 	for _, col := range stmt.Columns {
 		colType := storage.TypeText
@@ -130,17 +289,14 @@ func (e *Executor) executeCreate(stmt *parser.CreateTableStatement) (*QueryResul
 	}
 
 	heap := storage.NewHeapFile(schema, e.BP, e.Disk)
-	e.Tables[stmt.Table] = heap
-
-	// Инициализируем счётчики для автоинкремента
-	for _, col := range columns {
-		if col.AutoIncrement {
-			e.Execute(fmt.Sprintf(
-				"INSERT INTO _sequences (table_name, col_name, next_val) VALUES ('%s', '%s', 1)",
-				stmt.Table, col.Name,
-			))
-		}
+	if heap == nil {
+		fmt.Printf("[ERROR] NewHeapFile returned nil for table %s", stmt.Table)
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: fmt.Sprintf("не удалось создать файл таблицы %s", stmt.Table),
+		}, nil
 	}
+	e.Tables[stmt.Table] = heap
 
 	return &QueryResult{
 		Type:         "CREATE",
@@ -243,7 +399,7 @@ func (e *Executor) executeInsert(stmt *parser.InsertStatement) (*QueryResult, er
 		// Обрабатываем автоинкремент
 		for i, col := range table.Schema.Columns {
 			if col.AutoIncrement {
-				nextID := e.getNextID(stmt.Table, col.Name)
+				nextID := utils.GenerateID()
 				values[i] = int32(nextID)
 				lastInsertID = int64(nextID)
 			}
@@ -327,6 +483,28 @@ func (e *Executor) executeInsert(stmt *parser.InsertStatement) (*QueryResult, er
 		}
 	}
 
+	// ===== Проверка уникальности (PRIMARY KEY / UNIQUE) =====
+	for idx, col := range table.Schema.Columns {
+		if col.PrimaryKey || col.Unique {
+			existingRows, err := table.ScanFull()
+			if err != nil {
+				return &QueryResult{
+					Type:  "ERROR",
+					Error: fmt.Sprintf("ошибка проверки уникальности: %v", err),
+				}, nil
+			}
+			for _, row := range existingRows {
+				if row.Values[idx] != nil && values[idx] != nil &&
+					fmt.Sprintf("%v", row.Values[idx]) == fmt.Sprintf("%v", values[idx]) {
+					return &QueryResult{
+						Type:  "ERROR",
+						Error: fmt.Sprintf("дублирующее значение для колонки '%s'", col.Name),
+					}, nil
+				}
+			}
+		}
+	}
+
 	row := &storage.Row{Values: values}
 	rid, err := table.InsertRow(row)
 	if err != nil {
@@ -336,8 +514,6 @@ func (e *Executor) executeInsert(stmt *parser.InsertStatement) (*QueryResult, er
 		}, nil
 	}
 
-	table.BufferPool.FlushAll()
-
 	return &QueryResult{
 		Type:         "INSERT",
 		AffectedRows: 1,
@@ -345,48 +521,6 @@ func (e *Executor) executeInsert(stmt *parser.InsertStatement) (*QueryResult, er
 		Columns:      []string{"rid", "message"},
 		Rows:         [][]interface{}{{fmt.Sprintf("%s", rid), "✓ Вставлено"}},
 	}, nil
-}
-
-func (e *Executor) getNextID(tableName, colName string) int {
-	result, err := e.Execute(fmt.Sprintf(
-		"SELECT next_val FROM _sequences WHERE table_name = '%s' AND col_name = '%s'",
-		tableName, colName,
-	))
-
-	if err != nil || result.Type == "ERROR" || len(result.Rows) == 0 {
-		e.Execute(fmt.Sprintf(
-			"INSERT INTO _sequences (table_name, col_name, next_val) VALUES ('%s', '%s', 2)",
-			tableName, colName,
-		))
-		return 1
-	}
-
-	var current int
-	if len(result.Rows) > 0 && len(result.Rows[0]) > 0 {
-		switch v := result.Rows[0][0].(type) {
-		case int:
-			current = v
-		case int64:
-			current = int(v)
-		case float64:
-			current = int(v)
-		default:
-			current = 1
-		}
-	}
-
-	if current == 0 {
-		current = 1
-	}
-
-	next := current + 1
-
-	e.Execute(fmt.Sprintf(
-		"UPDATE _sequences SET next_val = %d WHERE table_name = '%s' AND col_name = '%s'",
-		next, tableName, colName,
-	))
-
-	return next
 }
 
 // executeSelect — SELECT
@@ -517,14 +651,102 @@ func (e *Executor) executeDelete(stmt *parser.DeleteStatement) (*QueryResult, er
 		}
 	}
 
-	table.BufferPool.FlushAll()
-
 	return &QueryResult{
 		Type:         "DELETE",
 		AffectedRows: int64(deleted),
 		Columns:      []string{"message"},
 		Rows:         [][]interface{}{{fmt.Sprintf("✓ Удалено %d строк", deleted)}},
 	}, nil
+}
+
+// executeDrop — DROP TABLE
+func (e *Executor) executeDrop(stmt *parser.DropTableStatement) (*QueryResult, error) {
+	tableName := stmt.Table
+
+	// Проверяем существование
+	table, ok := e.Tables[tableName]
+	if !ok {
+		if stmt.IfExists {
+			return &QueryResult{
+				Type:    "DROP",
+				Columns: []string{"message"},
+				Rows:    [][]interface{}{{fmt.Sprintf("✓ Таблица '%s' не существует, пропущено", tableName)}},
+			}, nil
+		}
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: fmt.Sprintf("таблица '%s' не найдена", tableName),
+		}, nil
+	}
+
+	// 1. Получаем TableID
+	tableID := table.TableID()
+
+	// 2. Очищаем страницы таблицы
+	if err := e.clearPagesByTableID(tableID, e.Disk, e.BP); err != nil {
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: fmt.Sprintf("ошибка очистки страниц: %v", err),
+		}, nil
+	}
+
+	// 3. Удаляем из каталога
+	if err := e.Catalog.RemoveTable(tableName); err != nil {
+		return &QueryResult{
+			Type:  "ERROR",
+			Error: fmt.Sprintf("ошибка удаления из каталога: %v", err),
+		}, nil
+	}
+
+	// 4. Удаляем из Executor.Tables
+	delete(e.Tables, tableName)
+
+	// 5. Удаляем связанные индексы
+	for idxName := range e.Indexes {
+		if strings.HasPrefix(idxName, tableName+".") {
+			delete(e.Indexes, idxName)
+		}
+	}
+
+	// 6. Сбрасываем на диск
+	e.BP.FlushAll()
+
+	return &QueryResult{
+		Type:    "DROP",
+		Columns: []string{"message"},
+		Rows:    [][]interface{}{{fmt.Sprintf("✓ Таблица '%s' удалена", tableName)}},
+	}, nil
+}
+
+// clearPagesByTableID очищает все страницы с указанным TableID
+func (e *Executor) clearPagesByTableID(tableID uint32, disk *storage.DiskManager, bp *storage.BufferPool) error {
+	var pagesToClean []uint64
+	totalPages := disk.PageCount() // используем новый метод
+
+	for pid := uint64(1); pid < totalPages; pid++ {
+		page, err := bp.FetchPage(pid)
+		if err != nil {
+			continue
+		}
+		header := page.ReadHeader()
+		if header.TableID == tableID {
+			pagesToClean = append(pagesToClean, pid)
+		}
+		bp.UnpinPage(pid, false)
+	}
+
+	for _, pid := range pagesToClean {
+		page, err := bp.FetchPage(pid)
+		if err != nil {
+			return err
+		}
+		// Создаём новую пустую страницу с тем же ID
+		newPage := storage.NewPage(pid)
+		copy(page.Data[:], newPage.Data[:])
+		page.Dirty = true
+		bp.UnpinPage(pid, true)
+	}
+	return nil
 }
 
 // executeUpdate — UPDATE
@@ -572,13 +794,35 @@ func (e *Executor) executeUpdate(stmt *parser.UpdateStatement) (*QueryResult, er
 			newValues[colIdx] = parsed
 		}
 
+		// ===== Проверка уникальности для обновляемых колонок =====
+		for _, upd := range stmt.Updates {
+			colIdx := findColumnIndex(table.Schema, upd.Column)
+			if colIdx == -1 {
+				continue
+			}
+			col := table.Schema.Columns[colIdx]
+			if col.PrimaryKey || col.Unique {
+				existingRows, _ := table.ScanFull()
+				for _, existingRow := range existingRows {
+					if existingRow.RID == row.RID {
+						continue
+					}
+					if existingRow.Values[colIdx] != nil && newValues[colIdx] != nil &&
+						fmt.Sprintf("%v", existingRow.Values[colIdx]) == fmt.Sprintf("%v", newValues[colIdx]) {
+						return &QueryResult{
+							Type:  "ERROR",
+							Error: fmt.Sprintf("дублирующее значение для колонки '%s'", col.Name),
+						}, nil
+					}
+				}
+			}
+		}
+
 		newRow := &storage.Row{Values: newValues}
 		if err := table.UpdateRow(row.RID, newRow); err == nil {
 			updated++
 		}
 	}
-
-	table.BufferPool.FlushAll()
 
 	return &QueryResult{
 		Type:         "UPDATE",
@@ -664,6 +908,8 @@ func evaluateCondition(row *storage.Row, schema *storage.TableSchema, cond *pars
 		return compareStrings(leftStr, rightStr) >= 0
 	case "<=":
 		return compareStrings(leftStr, rightStr) <= 0
+	case "LIKE": // ← добавляем
+		return strings.Contains(leftStr, rightStr)
 	}
 	return false
 }

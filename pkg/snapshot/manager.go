@@ -55,35 +55,34 @@ func NewSnapshotManager(exec *executor.Executor, projectPath string, memoryMgr *
 func (sm *SnapshotManager) initTables() {
 	tables := []string{
 		`CREATE TABLE IF NOT EXISTS versions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            version_num INTEGER NOT NULL UNIQUE,
-            parent_version INTEGER,
+            id INT PRIMARY_KEY AUTOINCREMENT,
+            version_num INT NOT_NULL UNIQUE,
+            parent_version INT,
             description TEXT,
-            created_at INTEGER NOT NULL,
+            created_at INT NOT_NULL,
             created_by TEXT,
             metadata TEXT
         )`,
 		`CREATE TABLE IF NOT EXISTS objects (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            hash TEXT UNIQUE NOT NULL,
+            id INT PRIMARY_KEY AUTOINCREMENT,
+            hash TEXT UNIQUE NOT_NULL,
             content TEXT,
-            size INTEGER,
-            created_at INTEGER
+            size INT,
+            created_at INT
         )`,
 		`CREATE TABLE IF NOT EXISTS version_files (
-            version_id INTEGER NOT NULL,
-            file_path TEXT NOT NULL,
-            object_hash TEXT NOT NULL,
+            version_id INT NOT_NULL,
+            file_path TEXT NOT_NULL,
+            object_hash TEXT NOT_NULL,
             operation TEXT,
-            PRIMARY KEY (version_id, file_path)
         )`,
 		`CREATE TABLE IF NOT EXISTS version_memory (
-            version_id INTEGER PRIMARY KEY,
+            version_id INT PRIMARY_KEY,
             instructions TEXT,
             thoughts TEXT,
             inferences TEXT,
             buffer TEXT,
-            created_at INTEGER
+            created_at INT
         )`,
 	}
 	for _, sql := range tables {
@@ -472,7 +471,7 @@ func (sm *SnapshotManager) restoreInstructions(instructions []Instruction) {
 	// Восстанавливаем инструкции
 	for _, inst := range instructions {
 		sm.exec.Execute(fmt.Sprintf(`
-			INSERT INTO instruction_stack (session_id, content, depth, status, created_at)
+			INSERT INTO instruction_stack (session_id, content, depth, created_at)
 			VALUES (%d, '%s', %d, '%s', %d)
 		`, inst.SessionID, escapeSQL(inst.Content), inst.Depth, inst.Status, inst.CreatedAt))
 	}

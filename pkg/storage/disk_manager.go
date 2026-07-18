@@ -99,3 +99,10 @@ func (dm *DiskManager) AllocatePage() uint64 {
 func (dm *DiskManager) Close() error {
 	return dm.file.Close()
 }
+
+// PageCount возвращает количество страниц в файле
+func (dm *DiskManager) PageCount() uint64 {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+	return dm.pageCount
+}

@@ -39,7 +39,7 @@ func (c *LLMClient) ChatStream(messages []Message, onChunk func(chunk string), o
 		return fmt.Errorf("ошибка маршалинга: %w", err)
 	}
 
-	url := strings.TrimRight(c.BaseURL, "/") + "/chat/completions"
+	url := strings.TrimRight(c.BaseURL, "/") + "/v1/chat/completions"
 	httpReq, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
 	if err != nil {
 		return fmt.Errorf("ошибка создания запроса: %w", err)

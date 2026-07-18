@@ -147,7 +147,7 @@ async function loadTableData(tableName) {
 
     try {
         // Пробуем получить данные
-        const sql = `SELECT * FROM ${tableName} ORDER BY id DESC LIMIT 10`
+        const sql = `SELECT * FROM ${tableName} LIMIT 10`
         const data = await post('/api/query', { sql })
 
         if (data.error) {

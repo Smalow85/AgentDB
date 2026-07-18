@@ -1,10 +1,10 @@
 package catalog
 
 import (
+	"agent-db/pkg/storage"
 	"encoding/json"
 	"fmt"
 	"os"
-	"agent-db/pkg/storage"
 )
 
 // Catalog хранит схемы всех таблиц
@@ -62,7 +62,11 @@ func (c *Catalog) Save() error {
 	return os.WriteFile(c.filePath, data, 0644)
 }
 
-func (c *Catalog) RemoveTable(name string) {
-    delete(c.Schemas, name)
-    c.Save()
+func (c *Catalog) RemoveTable(name string) error {
+	if _, ok := c.Schemas[name]; !ok {
+		return fmt.Errorf("таблица '%s' не найдена", name)
+	}
+	delete(c.Schemas, name)
+	// Сохраняем каталог на диск
+	return c.Save()
 }

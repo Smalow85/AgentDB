@@ -40,7 +40,7 @@ func Parse(input string) (Statement, error) {
 	case "UPDATE":
 		return p.parseUpdate()
 	case "DROP":
-    	return p.parseDrop()	
+		return p.parseDrop()
 	default:
 		return nil, fmt.Errorf("неизвестная команда: %s", p.current().Value)
 	}
@@ -75,25 +75,25 @@ func (p *Parser) parseSelect() (*SelectStatement, error) {
 
 	// Колонки
 	for p.current().Type != TokenEOF && p.current().Value != "FROM" {
-    if p.current().Value == "COUNT" || p.current().Value == "SUM" ||
-       p.current().Value == "AVG" || p.current().Value == "MIN" ||
-       p.current().Value == "MAX" {
-        // Парсим агрегатную функцию
-        agg, err := p.parseAggregate()
-        if err != nil {
-            return nil, err
-        }
-        stmt.Aggregates = append(stmt.Aggregates, agg)
-        stmt.Columns = append(stmt.Columns, agg.Func+"("+agg.Column+")")
-    } else if p.current().Type == TokenIdentifier || p.current().Value == "*" {
-        stmt.Columns = append(stmt.Columns, p.current().Value)
-        p.next()
-    } else if p.current().Type == TokenPunctuation && p.current().Value == "," {
-        p.next()
-    } else {
-        p.next()
-    }
-}
+		if p.current().Value == "COUNT" || p.current().Value == "SUM" ||
+			p.current().Value == "AVG" || p.current().Value == "MIN" ||
+			p.current().Value == "MAX" {
+			// Парсим агрегатную функцию
+			agg, err := p.parseAggregate()
+			if err != nil {
+				return nil, err
+			}
+			stmt.Aggregates = append(stmt.Aggregates, agg)
+			stmt.Columns = append(stmt.Columns, agg.Func+"("+agg.Column+")")
+		} else if p.current().Type == TokenIdentifier || p.current().Value == "*" {
+			stmt.Columns = append(stmt.Columns, p.current().Value)
+			p.next()
+		} else if p.current().Type == TokenPunctuation && p.current().Value == "," {
+			p.next()
+		} else {
+			p.next()
+		}
+	}
 	if p.current().Value != "FROM" {
 		return nil, fmt.Errorf("ожидается FROM")
 	}
@@ -210,193 +210,186 @@ func (p *Parser) parseSelect() (*SelectStatement, error) {
 }
 
 func (p *Parser) parseInsert() (*InsertStatement, error) {
-    stmt := &InsertStatement{}
-    p.next() // skip INSERT
+	stmt := &InsertStatement{}
+	p.next() // skip INSERT
 
-    if p.current().Value != "INTO" {
-        return nil, fmt.Errorf("ожидается INTO")
-    }
-    p.next()
+	if p.current().Value != "INTO" {
+		return nil, fmt.Errorf("ожидается INTO")
+	}
+	p.next()
 
-    if p.current().Type != TokenIdentifier {
-        return nil, fmt.Errorf("ожидается имя таблицы")
-    }
-    stmt.Table = p.current().Value
-    p.next()
+	if p.current().Type != TokenIdentifier {
+		return nil, fmt.Errorf("ожидается имя таблицы")
+	}
+	stmt.Table = p.current().Value
+	p.next()
 
 	fmt.Printf("[DEBUG] parseInsert: table=%s current=%v\n", stmt.Table, p.current())
 
-    // Колонки (опционально)
-    if p.current().Value == "(" {
+	// Колонки (опционально)
+	if p.current().Value == "(" {
 		fmt.Println("[DEBUG] parseInsert: found columns")
-        p.next() // skip (
-        for p.current().Value != ")" {
-            if p.current().Type == TokenPunctuation && p.current().Value == "," {
-                p.next()
-                continue
-            }
-            if p.current().Type == TokenIdentifier {
-                stmt.Columns = append(stmt.Columns, p.current().Value)
-            }
-            p.next()
-        }
-        p.next() // skip )
+		p.next() // skip (
+		for p.current().Value != ")" {
+			if p.current().Type == TokenPunctuation && p.current().Value == "," {
+				p.next()
+				continue
+			}
+			if p.current().Type == TokenIdentifier {
+				stmt.Columns = append(stmt.Columns, p.current().Value)
+			}
+			p.next()
+		}
+		p.next() // skip )
 		fmt.Printf("[DEBUG] parseInsert: columns=%v\n", stmt.Columns)
-    }
+	}
 
-    if p.current().Value != "VALUES" {
-        return nil, fmt.Errorf("ожидается VALUES")
-    }
-    p.next() // skip VALUES
+	if p.current().Value != "VALUES" {
+		return nil, fmt.Errorf("ожидается VALUES")
+	}
+	p.next() // skip VALUES
 
-    if p.current().Value != "(" {
-        return nil, fmt.Errorf("ожидается (")
-    }
-    p.next()
+	if p.current().Value != "(" {
+		return nil, fmt.Errorf("ожидается (")
+	}
+	p.next()
 
-    for p.current().Value != ")" {
-        if p.current().Type == TokenPunctuation && p.current().Value == "," {
-            p.next()
-            continue
-        }
-        expr, err := p.parseExpression()
-        if err != nil {
-            return nil, err
-        }
-        stmt.Values = append(stmt.Values, expr)
-    }
-    p.next() // skip )
-    return stmt, nil
+	for p.current().Value != ")" {
+		if p.current().Type == TokenPunctuation && p.current().Value == "," {
+			p.next()
+			continue
+		}
+		expr, err := p.parseExpression()
+		if err != nil {
+			return nil, err
+		}
+		stmt.Values = append(stmt.Values, expr)
+	}
+	p.next() // skip )
+	return stmt, nil
 }
 
 func (p *Parser) parseCreate() (Statement, error) {
-    p.next() // skip CREATE
+	p.next() // skip CREATE
 
-    if p.current().Value == "TABLE" {
-        return p.parseCreateTable()
-    }
-    if p.current().Value == "INDEX" {
-        return p.parseCreateIndex()
-    }
-    return nil, fmt.Errorf("ожидается TABLE или INDEX после CREATE")
+	if p.current().Value == "TABLE" {
+		return p.parseCreateTable()
+	}
+	if p.current().Value == "INDEX" {
+		return p.parseCreateIndex()
+	}
+	return nil, fmt.Errorf("ожидается TABLE или INDEX после CREATE")
 }
 
 func (p *Parser) parseCreateTable() (*CreateTableStatement, error) {
-    stmt := &CreateTableStatement{}
-    p.next() // skip TABLE
+	stmt := &CreateTableStatement{}
+	p.next() // skip TABLE
 
-    // IF NOT EXISTS
-    if p.current().Value == "IF" {
-        p.next() // skip IF
-        if p.current().Value != "NOT" {
-            return nil, fmt.Errorf("ожидается NOT после IF")
-        }
-        p.next() // skip NOT
-        if p.current().Value != "EXISTS" {
-            return nil, fmt.Errorf("ожидается EXISTS после NOT")
-        }
-        p.next() // skip EXISTS
-        stmt.IfNotExists = true
-    }
+	// IF NOT EXISTS
+	if p.current().Value == "IF" {
+		p.next() // skip IF
+		if p.current().Value != "NOT" {
+			return nil, fmt.Errorf("ожидается NOT после IF")
+		}
+		p.next() // skip NOT
+		if p.current().Value != "EXISTS" {
+			return nil, fmt.Errorf("ожидается EXISTS после NOT")
+		}
+		p.next() // skip EXISTS
+		stmt.IfNotExists = true
+	}
 
-    if p.current().Type != TokenIdentifier {
-        return nil, fmt.Errorf("ожидается имя таблицы")
-    }
-    stmt.Table = p.current().Value
-    p.next()
+	if p.current().Type != TokenIdentifier {
+		return nil, fmt.Errorf("ожидается имя таблицы")
+	}
+	stmt.Table = p.current().Value
+	p.next()
 
-    if p.current().Value != "(" {
-        return nil, fmt.Errorf("ожидается (")
-    }
-    p.next()
+	if p.current().Value != "(" {
+		return nil, fmt.Errorf("ожидается (")
+	}
+	p.next()
 
-    for p.current().Value != ")" {
-        if p.current().Type == TokenPunctuation && p.current().Value == "," {
-            p.next()
-            continue
-        }
+	for p.current().Value != ")" {
+		if p.current().Type == TokenPunctuation && p.current().Value == "," {
+			p.next()
+			continue
+		}
 
-        if p.current().Type != TokenIdentifier {
-            return nil, fmt.Errorf("ожидается имя колонки")
-        }
-        colName := p.current().Value
-        p.next()
+		if p.current().Type != TokenIdentifier {
+			return nil, fmt.Errorf("ожидается имя колонки")
+		}
+		colName := p.current().Value
+		p.next()
 
-        if p.current().Type != TokenKeyword && p.current().Type != TokenIdentifier {
-            return nil, fmt.Errorf("ожидается тип колонки")
-        }
-        colType := p.current().Value
-        p.next()
+		if p.current().Type != TokenKeyword && p.current().Type != TokenIdentifier {
+			return nil, fmt.Errorf("ожидается тип колонки")
+		}
+		colType := p.current().Value
+		p.next()
 
-        col := ColumnDef{Name: colName, Type: colType}
+		col := ColumnDef{Name: colName, Type: colType}
 
-        // Constraints
-        for p.current().Value != "," && p.current().Value != ")" {
-            switch p.current().Value {
-            case "PRIMARY":
-                p.next()
-                if p.current().Value != "KEY" {
-                    return nil, fmt.Errorf("ожидается KEY")
-                }
-                p.next()
-                col.PrimaryKey = true
-                col.NotNull = true
-            case "NOT":
-                p.next()
-                if p.current().Value != "NULL" {
-                    return nil, fmt.Errorf("ожидается NULL")
-                }
-                p.next()
-                col.NotNull = true
-            case "UNIQUE":
-                p.next()
-                col.Unique = true
-            case "DEFAULT":
-                p.next()
-                expr, _ := p.parseExpression()
-                if lit, ok := expr.(*Literal); ok {
-                    col.Default = lit.Value
-                }
-            case "CHECK":
-                p.next()
-                if p.current().Value != "(" {
-                    return nil, fmt.Errorf("ожидается (")
-                }
-                p.next()
-                parts := []string{}
-                for p.current().Value != ")" {
-                    parts = append(parts, p.current().Value)
-                    p.next()
-                }
-                p.next()
-                col.Check = strings.Join(parts, " ")
-            case "REFERENCES":
-                p.next()
-                refTable := p.current().Value
-                p.next()
-                if p.current().Value != "(" {
-                    return nil, fmt.Errorf("ожидается (")
-                }
-                p.next()
-                refCol := p.current().Value
-                p.next()
-                if p.current().Value != ")" {
-                    return nil, fmt.Errorf("ожидается )")
-                }
-                p.next()
-                col.References = refTable + "(" + refCol + ")"
+		// Constraints
+		for p.current().Value != "," && p.current().Value != ")" {
+			switch p.current().Value {
+			case "PRIMARY_KEY":
+				p.next()
+
+				col.PrimaryKey = true
+				col.NotNull = true
+			case "NOT_NULL":
+				p.next()
+				col.NotNull = true
+			case "UNIQUE":
+				p.next()
+				col.Unique = true
+			case "DEFAULT":
+				p.next()
+				expr, _ := p.parseExpression()
+				if lit, ok := expr.(*Literal); ok {
+					col.Default = lit.Value
+				}
+			case "CHECK":
+				p.next()
+				if p.current().Value != "(" {
+					return nil, fmt.Errorf("ожидается (")
+				}
+				p.next()
+				parts := []string{}
+				for p.current().Value != ")" {
+					parts = append(parts, p.current().Value)
+					p.next()
+				}
+				p.next()
+				col.Check = strings.Join(parts, " ")
+			case "REFERENCES":
+				p.next()
+				refTable := p.current().Value
+				p.next()
+				if p.current().Value != "(" {
+					return nil, fmt.Errorf("ожидается (")
+				}
+				p.next()
+				refCol := p.current().Value
+				p.next()
+				if p.current().Value != ")" {
+					return nil, fmt.Errorf("ожидается )")
+				}
+				p.next()
+				col.References = refTable + "(" + refCol + ")"
 			case "AUTOINCREMENT":
 				col.AutoIncrement = true
 				p.next()
-            default:
-                goto done
-            }
-        }
-    done:
-        stmt.Columns = append(stmt.Columns, col)
-    }
-    p.next() // skip )
-    return stmt, nil
+			default:
+				goto done
+			}
+		}
+	done:
+		stmt.Columns = append(stmt.Columns, col)
+	}
+	p.next() // skip )
+	return stmt, nil
 }
 
 // parseCreateIndex: CREATE INDEX name ON table (column)
@@ -447,7 +440,7 @@ func (p *Parser) parseCondition() (*BinaryOp, error) {
 		return nil, err
 	}
 
-	if p.current().Type != TokenOperator {
+	if p.current().Type != TokenOperator && p.current().Value != "LIKE" {
 		return nil, fmt.Errorf("ожидается оператор, получено %v", p.current())
 	}
 	op := p.current().Value
@@ -566,46 +559,56 @@ func (p *Parser) parseUpdate() (*UpdateStatement, error) {
 }
 
 func (p *Parser) parseDrop() (*DropTableStatement, error) {
-    stmt := &DropTableStatement{}
-    p.next() // skip DROP
+	stmt := &DropTableStatement{}
+	p.next() // skip DROP
 
-    if p.current().Value != "TABLE" {
-        return nil, fmt.Errorf("ожидается TABLE после DROP")
-    }
-    p.next() // skip TABLE
+	if p.current().Value != "TABLE" {
+		return nil, fmt.Errorf("ожидается TABLE после DROP")
+	}
+	p.next()
 
-    if p.current().Type != TokenIdentifier {
-        return nil, fmt.Errorf("ожидается имя таблицы")
-    }
-    stmt.Table = p.current().Value
-    p.next()
+	// IF EXISTS
+	if p.current().Value == "IF" {
+		p.next()
+		if p.current().Value != "EXISTS" {
+			return nil, fmt.Errorf("ожидается EXISTS после IF")
+		}
+		p.next()
+		stmt.IfExists = true
+	}
 
-    return stmt, nil
+	if p.current().Type != TokenIdentifier {
+		return nil, fmt.Errorf("ожидается имя таблицы")
+	}
+	stmt.Table = p.current().Value
+	p.next()
+
+	return stmt, nil
 }
 
 func (p *Parser) parseAggregate() (Aggregate, error) {
-    agg := Aggregate{}
-    agg.Func = p.current().Value
-    p.next() // skip COUNT/SUM/etc
+	agg := Aggregate{}
+	agg.Func = p.current().Value
+	p.next() // skip COUNT/SUM/etc
 
-    if p.current().Value != "(" {
-        return agg, fmt.Errorf("ожидается ( после %s", agg.Func)
-    }
-    p.next() // skip (
+	if p.current().Value != "(" {
+		return agg, fmt.Errorf("ожидается ( после %s", agg.Func)
+	}
+	p.next() // skip (
 
-    if p.current().Value == "*" {
-        agg.Column = "*"
-    } else if p.current().Type == TokenIdentifier {
-        agg.Column = p.current().Value
-    } else {
-        return agg, fmt.Errorf("ожидается колонка или *")
-    }
-    p.next()
+	if p.current().Value == "*" {
+		agg.Column = "*"
+	} else if p.current().Type == TokenIdentifier {
+		agg.Column = p.current().Value
+	} else {
+		return agg, fmt.Errorf("ожидается колонка или *")
+	}
+	p.next()
 
-    if p.current().Value != ")" {
-        return agg, fmt.Errorf("ожидается )")
-    }
-    p.next()
+	if p.current().Value != ")" {
+		return agg, fmt.Errorf("ожидается )")
+	}
+	p.next()
 
-    return agg, nil
+	return agg, nil
 }

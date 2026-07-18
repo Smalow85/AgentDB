@@ -77,7 +77,7 @@ func TestBufferPoolDirtyFlush(t *testing.T) {
 	defer teardownBufferPool(bp, disk)
 
 	page, _ := bp.FetchPage(1)
-	
+
 	// Меняем страницу
 	data := []byte("test")
 	page.InsertRow(data)
@@ -98,5 +98,43 @@ func TestBufferPoolDirtyFlush(t *testing.T) {
 	row, _ := pageAgain.GetRow(0)
 	if string(row) != "test" {
 		t.Error("Данные должны сохраниться после вытеснения")
+	}
+}
+
+func TestBufferPool_FlushAll(t *testing.T) {
+	path := "test_bp.db"
+	defer os.Remove(path)
+
+	dm, _ := NewDiskManager(path)
+	defer dm.Close()
+
+	bp := NewBufferPool(10, dm)
+
+	// Создаём страницу через BufferPool
+	page, err := bp.FetchPage(1)
+	if err != nil {
+		t.Fatalf("FetchPage failed: %v", err)
+	}
+
+	// Пишем данные
+	page.Data[100] = 0x42
+	bp.UnpinPage(1, true)
+
+	// Флушим
+	if err := bp.FlushAll(); err != nil {
+		t.Fatalf("FlushAll failed: %v", err)
+	}
+
+	// Создаём НОВЫЙ BufferPool (симулируем перезапуск)
+	bp2 := NewBufferPool(10, dm)
+
+	// Читаем страницу
+	page2, err := bp2.FetchPage(1)
+	if err != nil {
+		t.Fatalf("FetchPage 2 failed: %v", err)
+	}
+
+	if page2.Data[100] != 0x42 {
+		t.Errorf("Data lost after flush: expected 0x42, got 0x%X", page2.Data[100])
 	}
 }

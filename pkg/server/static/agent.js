@@ -62,8 +62,8 @@ async function sendAgentMessage() {
     const baseURL = selectedModel.base_url || '';
     const apiKey = selectedModel.api_key || '';
 
-    if (!model || !baseURL || !apiKey) {
-        appendMessage('system', '❌ У модели не заполнены все поля (name, base_url, api_key)');
+    if (!model || !baseURL) {
+        appendMessage('system', '❌ У модели не заполнены все поля (name, base_urly)');
         return;
     }
 

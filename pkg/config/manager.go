@@ -53,26 +53,23 @@ func NewConfigManager(exec *executor.Executor) *ConfigManager {
 func (cm *ConfigManager) initTables() {
 	tables := []string{
 		`CREATE TABLE IF NOT EXISTS model_configs (
-            id INT PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            display_name TEXT NOT NULL,
-            base_url TEXT NOT NULL,
-            api_key TEXT NOT NULL,
+            name TEXT NOT_NULL UNIQUE,
+            display_name TEXT NOT_NULL,
+            base_url TEXT NOT_NULL,
+            api_key TEXT NOT_NULL,
             is_default INT DEFAULT 0,
-            created_at INT NOT NULL,
-            updated_at INT NOT NULL
+            created_at INT NOT_NULL,
+            updated_at INT NOT_NULL
         )`,
 		`CREATE TABLE IF NOT EXISTS project_configs (
-            id INT PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL UNIQUE,
-            root_path TEXT NOT NULL,
+            name TEXT NOT_NULL UNIQUE,
+            root_path TEXT NOT_NULL,
             description TEXT,
             is_active INT DEFAULT 0,
-            last_used INT NOT NULL,
-            created_at INT NOT NULL
+            last_used INT NOT_NULL,
+            created_at INT NOT_NULL
         )`,
 		`CREATE TABLE IF NOT EXISTS user_settings (
-            id INT PRIMARY KEY DEFAULT 1,
             active_model_id INT,
             active_project_id INT,
             default_session_id INT DEFAULT 1,
@@ -161,7 +158,7 @@ func (cm *ConfigManager) AddModel(name, displayName, baseURL, apiKey string, isD
 
 func (cm *ConfigManager) GetModelByName(name string) (*ModelConfig, error) {
 	result, err := cm.exec.Execute(fmt.Sprintf(`
-        SELECT id, name, display_name, base_url, api_key, is_default, created_at, updated_at
+        SELECT name, display_name, base_url, api_key, is_default, created_at, updated_at
         FROM model_configs WHERE name = '%s'
     `, escapeSQL(name)))
 

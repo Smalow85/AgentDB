@@ -81,7 +81,6 @@ func (h *HeapFile) InsertRow(row *Row) (RID, error) {
 	}
 
 	h.BufferPool.UnpinPage(pageID, true)
-	h.BufferPool.FlushAll()
 
 	return RID{PageID: pageID, SlotID: slotID}, nil
 }
